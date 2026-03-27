@@ -13,6 +13,7 @@ from .models import PackageInfo
 
 PYPI_API = "https://pypi.org/pypi"
 NPM_API = "https://registry.npmjs.org"
+MAX_ARCHIVE_SIZE = 50 * 1024 * 1024  # 50MB — reject larger archives to prevent OOM
 
 
 async def resolve_package(name: str, version: str | None, ecosystem: str) -> PackageInfo:
@@ -117,6 +118,8 @@ async def _download_pypi_source(package: PackageInfo) -> dict[str, str]:
         resp = await client.get(download_url)
         resp.raise_for_status()
         content = resp.content
+        if len(content) > MAX_ARCHIVE_SIZE:
+            raise ValueError(f"Archive too large: {len(content)} bytes (max {MAX_ARCHIVE_SIZE})")
 
     return _extract_archive(content, download_url)
 
@@ -137,8 +140,17 @@ async def _download_npm_source(package: PackageInfo) -> dict[str, str]:
         resp = await client.get(tarball_url)
         resp.raise_for_status()
         content = resp.content
+        if len(content) > MAX_ARCHIVE_SIZE:
+            raise ValueError(f"Archive too large: {len(content)} bytes (max {MAX_ARCHIVE_SIZE})")
 
     return _extract_archive(content, tarball_url)
+
+
+def _is_path_safe(name: str) -> bool:
+    """Reject path traversal and absolute paths."""
+    if not name or name.startswith("/") or ".." in name.split("/"):
+        return False
+    return True
 
 
 def _extract_archive(content: bytes, filename: str) -> dict[str, str]:
@@ -156,6 +168,8 @@ def _extract_archive(content: bytes, filename: str) -> dict[str, str]:
                 for member in tar.getmembers():
                     if not member.isfile() or member.size > max_file_size:
                         continue
+                    if not _is_path_safe(member.name):
+                        continue
                     suffix = Path(member.name).suffix.lower()
                     if suffix not in text_extensions:
                         continue
@@ -169,6 +183,8 @@ def _extract_archive(content: bytes, filename: str) -> dict[str, str]:
             with zipfile.ZipFile(io.BytesIO(content)) as zf:
                 for info in zf.infolist():
                     if info.is_dir() or info.file_size > max_file_size:
+                        continue
+                    if not _is_path_safe(info.filename):
                         continue
                     suffix = Path(info.filename).suffix.lower()
                     if suffix not in text_extensions:
