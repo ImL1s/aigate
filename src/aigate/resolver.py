@@ -1,0 +1,210 @@
+"""Package resolver — fetch metadata and source from registries."""
+
+from __future__ import annotations
+
+import io
+import tarfile
+import zipfile
+from pathlib import Path
+
+import httpx
+
+from .models import PackageInfo
+
+PYPI_API = "https://pypi.org/pypi"
+NPM_API = "https://registry.npmjs.org"
+
+
+async def resolve_package(name: str, version: str | None, ecosystem: str) -> PackageInfo:
+    """Resolve package metadata from registry."""
+    if ecosystem == "pypi":
+        return await _resolve_pypi(name, version)
+    elif ecosystem == "npm":
+        return await _resolve_npm(name, version)
+    else:
+        raise ValueError(f"Unsupported ecosystem: {ecosystem}")
+
+
+async def _resolve_pypi(name: str, version: str | None) -> PackageInfo:
+    """Resolve from PyPI JSON API."""
+    url = f"{PYPI_API}/{name}/json" if not version else f"{PYPI_API}/{name}/{version}/json"
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        data = resp.json()
+
+    info = data["info"]
+    latest_version = version or info.get("version", "")
+    has_scripts = any(
+        url_info.get("packagetype") == "sdist"
+        for url_info in data.get("urls", [])
+    )
+
+    return PackageInfo(
+        name=name,
+        version=latest_version,
+        ecosystem="pypi",
+        author=info.get("author", "") or info.get("author_email", ""),
+        description=info.get("summary", ""),
+        homepage=info.get("home_page", "") or info.get("project_url", ""),
+        repository=_extract_repo_url(info.get("project_urls", {})),
+        has_install_scripts=has_scripts,
+        dependencies=info.get("requires_dist", []) or [],
+        metadata={"info": info},
+    )
+
+
+async def _resolve_npm(name: str, version: str | None) -> PackageInfo:
+    """Resolve from npm registry."""
+    url = f"{NPM_API}/{name}"
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        data = resp.json()
+
+    latest_version = version or data.get("dist-tags", {}).get("latest", "")
+    version_data = data.get("versions", {}).get(latest_version, {})
+    scripts = version_data.get("scripts", {})
+    has_scripts = bool(
+        scripts.get("preinstall") or scripts.get("postinstall") or scripts.get("install")
+    )
+
+    return PackageInfo(
+        name=name,
+        version=latest_version,
+        ecosystem="npm",
+        author=_extract_npm_author(version_data),
+        description=version_data.get("description", ""),
+        homepage=version_data.get("homepage", ""),
+        repository=_extract_npm_repo(version_data),
+        has_install_scripts=has_scripts,
+        dependencies=list(version_data.get("dependencies", {}).keys()),
+        metadata={"version_data": version_data},
+    )
+
+
+async def download_source(package: PackageInfo, dest: Path | None = None) -> dict[str, str]:
+    """Download and extract package source, return {filepath: content} dict."""
+    if package.ecosystem == "pypi":
+        return await _download_pypi_source(package)
+    elif package.ecosystem == "npm":
+        return await _download_npm_source(package)
+    else:
+        raise ValueError(f"Unsupported ecosystem: {package.ecosystem}")
+
+
+async def _download_pypi_source(package: PackageInfo) -> dict[str, str]:
+    """Download PyPI sdist/wheel and extract text files."""
+    url = f"{PYPI_API}/{package.name}/{package.version}/json"
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        data = resp.json()
+
+    # Prefer sdist over wheel (has setup.py)
+    urls = data.get("urls", [])
+    download_url = None
+    for u in urls:
+        if u.get("packagetype") == "sdist":
+            download_url = u["url"]
+            break
+    if not download_url and urls:
+        download_url = urls[0]["url"]
+    if not download_url:
+        return {}
+
+    async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+        resp = await client.get(download_url)
+        resp.raise_for_status()
+        content = resp.content
+
+    return _extract_archive(content, download_url)
+
+
+async def _download_npm_source(package: PackageInfo) -> dict[str, str]:
+    """Download npm tarball and extract text files."""
+    url = f"{NPM_API}/{package.name}/{package.version}"
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        data = resp.json()
+
+    tarball_url = data.get("dist", {}).get("tarball")
+    if not tarball_url:
+        return {}
+
+    async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+        resp = await client.get(tarball_url)
+        resp.raise_for_status()
+        content = resp.content
+
+    return _extract_archive(content, tarball_url)
+
+
+def _extract_archive(content: bytes, filename: str) -> dict[str, str]:
+    """Extract text files from tar.gz or zip/whl archive."""
+    files: dict[str, str] = {}
+    text_extensions = {
+        ".py", ".js", ".ts", ".json", ".yaml", ".yml", ".toml", ".cfg",
+        ".ini", ".txt", ".md", ".rst", ".sh", ".bat", ".pth",
+    }
+    max_file_size = 512 * 1024  # 512KB per file
+
+    try:
+        if filename.endswith((".tar.gz", ".tgz")):
+            with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as tar:
+                for member in tar.getmembers():
+                    if not member.isfile() or member.size > max_file_size:
+                        continue
+                    suffix = Path(member.name).suffix.lower()
+                    if suffix not in text_extensions:
+                        continue
+                    f = tar.extractfile(member)
+                    if f:
+                        try:
+                            files[member.name] = f.read().decode("utf-8", errors="replace")
+                        except Exception:
+                            pass
+        elif filename.endswith((".whl", ".zip")):
+            with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                for info in zf.infolist():
+                    if info.is_dir() or info.file_size > max_file_size:
+                        continue
+                    suffix = Path(info.filename).suffix.lower()
+                    if suffix not in text_extensions:
+                        continue
+                    try:
+                        files[info.filename] = zf.read(info.filename).decode(
+                            "utf-8", errors="replace"
+                        )
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+    return files
+
+
+def _extract_repo_url(project_urls: dict[str, str] | None) -> str:
+    if not project_urls:
+        return ""
+    for key in ("Repository", "Source", "Source Code", "GitHub", "Homepage"):
+        if key in project_urls:
+            url = project_urls[key]
+            if "github.com" in url or "gitlab.com" in url:
+                return url
+    return ""
+
+
+def _extract_npm_author(data: dict) -> str:
+    author = data.get("author", "")
+    if isinstance(author, dict):
+        return author.get("name", "")
+    return str(author)
+
+
+def _extract_npm_repo(data: dict) -> str:
+    repo = data.get("repository", "")
+    if isinstance(repo, dict):
+        return repo.get("url", "")
+    return str(repo)
