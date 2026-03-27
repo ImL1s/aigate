@@ -16,7 +16,7 @@ from typing import Any
 import httpx
 
 from ..models import PackageInfo
-from . import EnrichmentConfig, Context7Config, _read_cache, _write_cache
+from . import Context7Config, _read_cache, _write_cache
 
 logger = logging.getLogger(__name__)
 
@@ -150,9 +150,7 @@ async def _fetch_docs(
         result["library_description"] = first.get("content", "")[:500]
 
     # Collect all snippets
-    result["doc_snippets"] = [
-        d.get("content", "")[:500] for d in docs[:5] if d.get("content")
-    ]
+    result["doc_snippets"] = [d.get("content", "")[:500] for d in docs[:5] if d.get("content")]
 
     # Try to infer expected capabilities from docs
     result["expected_capabilities"] = _infer_capabilities(docs)

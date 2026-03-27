@@ -8,15 +8,18 @@ from __future__ import annotations
 
 import json
 import os
-import stat
 import subprocess
+import tempfile
 import textwrap
 from pathlib import Path
 
-import pytest
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 HOOK_SCRIPT = PROJECT_ROOT / "scripts" / "pretool-hook.sh"
+
+DEFAULT_SAFE_AIGATE = (
+    "#!/usr/bin/env zsh\n"
+    """echo '{"prefilter":{"risk_level":"none","reason":"safe"}}'\n"""
+)
 
 
 def _make_input(command: str) -> str:
@@ -39,38 +42,39 @@ def _run_hook(
     """
     env = os.environ.copy()
 
-    if fake_aigate is not None:
-        # Create a temp fake aigate binary
-        fake_bin = PROJECT_ROOT / ".test_fake_aigate"
-        fake_bin.write_text(f"#!/usr/bin/env zsh\n{fake_aigate}\n")
-        fake_bin.chmod(fake_bin.stat().st_mode | stat.S_IEXEC)
-        env["AIGATE_BIN"] = str(fake_bin)
-    else:
-        # Default: aigate that outputs safe JSON
-        fake_bin = PROJECT_ROOT / ".test_fake_aigate"
-        fake_bin.write_text(textwrap.dedent("""\
-            #!/usr/bin/env zsh
-            echo '{"prefilter":{"risk_level":"none","reason":"safe"}}'
-        """))
-        fake_bin.chmod(fake_bin.stat().st_mode | stat.S_IEXEC)
-        env["AIGATE_BIN"] = str(fake_bin)
+    # Use a unique temp file per invocation to avoid race conditions
+    fd, fake_bin_path = tempfile.mkstemp(prefix="aigate_test_", suffix=".sh")
+    try:
+        if fake_aigate is not None:
+            content = f"#!/usr/bin/env zsh\n{fake_aigate}\n"
+        else:
+            content = DEFAULT_SAFE_AIGATE
 
-    result = subprocess.run(
-        ["zsh", str(HOOK_SCRIPT)],
-        input=_make_input(command),
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        env=env,
-    )
-    # Cleanup
-    fake_bin.unlink(missing_ok=True)
+        os.write(fd, content.encode())
+        os.close(fd)
+        os.chmod(fake_bin_path, 0o755)
+        env["AIGATE_BIN"] = fake_bin_path
+
+        result = subprocess.run(
+            ["zsh", str(HOOK_SCRIPT)],
+            input=_make_input(command),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
+    finally:
+        try:
+            os.unlink(fake_bin_path)
+        except OSError:
+            pass
     return result
 
 
 # ---------------------------------------------------------------------------
 # Skip / passthrough tests (hook should output nothing and exit 0)
 # ---------------------------------------------------------------------------
+
 
 class TestSkipCases:
     """Commands that the hook should ignore (allow silently)."""
@@ -146,6 +150,7 @@ class TestSkipCases:
 # Safe package tests (aigate returns safe → hook outputs nothing)
 # ---------------------------------------------------------------------------
 
+
 class TestSafePackages:
     """When aigate says the package is safe, the hook should allow silently."""
 
@@ -198,6 +203,7 @@ class TestSafePackages:
 # ---------------------------------------------------------------------------
 # Blocked package tests (aigate returns critical/high → hook blocks)
 # ---------------------------------------------------------------------------
+
 
 class TestBlockedPackages:
     """When aigate flags a package as critical/high, the hook should block."""
@@ -252,6 +258,7 @@ class TestBlockedPackages:
 # Medium/Low risk → allow (only critical/high should block)
 # ---------------------------------------------------------------------------
 
+
 class TestAllowedRiskLevels:
     """Medium and low risk should pass through (not block)."""
 
@@ -277,6 +284,7 @@ class TestAllowedRiskLevels:
 # ---------------------------------------------------------------------------
 # Edge cases: selective blocking with smart fake aigate
 # ---------------------------------------------------------------------------
+
 
 class TestSelectiveBlocking:
     """Test that the hook correctly checks each package individually."""
@@ -317,6 +325,7 @@ class TestSelectiveBlocking:
 # ---------------------------------------------------------------------------
 # Command variations
 # ---------------------------------------------------------------------------
+
 
 class TestCommandVariations:
     """Various forms of pip/npm commands."""
@@ -362,6 +371,7 @@ class TestCommandVariations:
 # Malformed / error handling
 # ---------------------------------------------------------------------------
 
+
 class TestErrorHandling:
     """Hook should handle errors gracefully (allow on error)."""
 
@@ -378,19 +388,25 @@ class TestErrorHandling:
     def test_malformed_json_input(self):
         """If stdin is not valid JSON, exit gracefully."""
         env = os.environ.copy()
-        fake_bin = PROJECT_ROOT / ".test_fake_aigate"
-        fake_bin.write_text("#!/usr/bin/env zsh\necho '{}'\n")
-        fake_bin.chmod(fake_bin.stat().st_mode | stat.S_IEXEC)
-        env["AIGATE_BIN"] = str(fake_bin)
+        fd, fake_bin_path = tempfile.mkstemp(prefix="aigate_test_", suffix=".sh")
+        try:
+            os.write(fd, b"#!/usr/bin/env zsh\necho '{}'\n")
+            os.close(fd)
+            os.chmod(fake_bin_path, 0o755)
+            env["AIGATE_BIN"] = fake_bin_path
 
-        result = subprocess.run(
-            ["zsh", str(HOOK_SCRIPT)],
-            input="not valid json",
-            capture_output=True,
-            text=True,
-            timeout=10,
-            env=env,
-        )
-        fake_bin.unlink(missing_ok=True)
+            result = subprocess.run(
+                ["zsh", str(HOOK_SCRIPT)],
+                input="not valid json",
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env=env,
+            )
+        finally:
+            try:
+                os.unlink(fake_bin_path)
+            except OSError:
+                pass
         # Should exit 0 (allow) even on bad input
         assert result.returncode == 0

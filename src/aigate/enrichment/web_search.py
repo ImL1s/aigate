@@ -164,16 +164,31 @@ def _score_relevance(result: dict[str, Any], package: PackageInfo) -> float:
 
     # High-signal security keywords
     high_signal = [
-        "malicious", "malware", "supply chain attack", "backdoor",
-        "compromised", "hijacked", "trojan", "credential theft",
-        "data exfiltration", "cryptominer",
+        "malicious",
+        "malware",
+        "supply chain attack",
+        "backdoor",
+        "compromised",
+        "hijacked",
+        "trojan",
+        "credential theft",
+        "data exfiltration",
+        "cryptominer",
     ]
     medium_signal = [
-        "vulnerability", "cve-", "ghsa-", "security advisory",
-        "deprecated", "abandoned", "unmaintained",
+        "vulnerability",
+        "cve-",
+        "ghsa-",
+        "security advisory",
+        "deprecated",
+        "abandoned",
+        "unmaintained",
     ]
     low_signal = [
-        "security", "risk", "warning", "caution",
+        "security",
+        "risk",
+        "warning",
+        "caution",
     ]
 
     for kw in high_signal:
@@ -207,11 +222,10 @@ def _extract_author_info(
     for r in results[:3]:
         title = r.get("title", "")
         desc = r.get("description", "")
-        url = r.get("link", "")
         if package.author and package.author.lower() in f"{title} {desc}".lower():
             snippets.append(f"- {title}: {desc[:150]}")
 
     if not snippets:
         return ""
 
-    return f"Author \"{package.author}\":\n" + "\n".join(snippets)
+    return f'Author "{package.author}":\n' + "\n".join(snippets)

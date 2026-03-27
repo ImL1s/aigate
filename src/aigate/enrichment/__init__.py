@@ -84,14 +84,9 @@ class EnrichmentResult:
         if self.library_description or self.doc_snippets:
             sections.append("\n### Official Documentation Context (via Context7)")
             if self.library_description:
-                sections.append(
-                    f"This package is described as: \"{self.library_description}\""
-                )
+                sections.append(f'This package is described as: "{self.library_description}"')
             if self.expected_capabilities:
-                sections.append(
-                    "Expected capabilities: "
-                    + ", ".join(self.expected_capabilities)
-                )
+                sections.append("Expected capabilities: " + ", ".join(self.expected_capabilities))
             for snippet in self.doc_snippets[:3]:  # Limit to 3 snippets
                 sections.append(f"- {snippet[:500]}")
 
@@ -99,7 +94,7 @@ class EnrichmentResult:
         if self.security_mentions:
             sections.append("\n### Security Intelligence (web search) [unverified]")
             for mention in self.security_mentions[:5]:  # Top 5
-                sections.append(f"- [{mention.source}] \"{mention.title}\"")
+                sections.append(f'- [{mention.source}] "{mention.title}"')
                 if mention.snippet:
                     sections.append(f"  {mention.snippet[:200]}")
         elif "web_search" in self.sources_queried:
@@ -110,7 +105,7 @@ class EnrichmentResult:
         if self.known_vulnerabilities:
             sections.append("\n### Known Vulnerabilities (OSV.dev)")
             for vuln in self.known_vulnerabilities:
-                line = f"- {vuln.id}: \"{vuln.summary}\" (severity: {vuln.severity})"
+                line = f'- {vuln.id}: "{vuln.summary}" (severity: {vuln.severity})'
                 if vuln.fixed_version:
                     line += f" — fixed in {vuln.fixed_version}"
                 sections.append(line)
@@ -246,7 +241,7 @@ async def run_enrichment(
             asyncio.gather(*coros, return_exceptions=True),
             timeout=config.timeout_seconds,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("Enrichment timed out after %ds", config.timeout_seconds)
         raw_results = [TimeoutError("enrichment timeout")] * len(coros)
 
