@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import time
+from dataclasses import asdict
 
 import click
 from rich.console import Console
@@ -13,7 +14,7 @@ from . import __version__
 from .cache import get_cached, set_cached
 from .config import Config
 from .consensus import run_consensus
-from .models import AnalysisLevel, AnalysisReport, PrefilterResult, RiskLevel, Verdict
+from .models import AnalysisLevel, AnalysisReport, PackageInfo, PrefilterResult, RiskLevel, Verdict
 from .prefilter import run_prefilter
 from .reporters.json_reporter import JsonReporter
 from .reporters.terminal import TerminalReporter
@@ -185,43 +186,82 @@ async def _check(
 
 @main.command()
 @click.argument("lockfile", type=click.Path(exists=True))
+@click.option(
+    "--ecosystem",
+    "-e",
+    default=None,
+    type=click.Choice(["pypi", "npm", "pub"]),
+    help="Override package ecosystem",
+)
 @click.option("--json", "use_json", is_flag=True, help="Output as JSON")
 @click.option("--skip-ai", is_flag=True, help="Only run static pre-filter")
-def scan(lockfile: str, use_json: bool, skip_ai: bool):
+def scan(lockfile: str, ecosystem: str | None, use_json: bool, skip_ai: bool):
     """Scan all dependencies in a lockfile.
 
     Example: aigate scan requirements.txt
     """
-    asyncio.run(_scan(lockfile, use_json, skip_ai))
+    asyncio.run(_scan(lockfile, use_json, skip_ai, ecosystem))
 
 
-async def _scan(lockfile: str, use_json: bool, skip_ai: bool):
-    ecosystem = _infer_ecosystem(lockfile)
+async def _scan(
+    lockfile: str,
+    use_json: bool,
+    skip_ai: bool,
+    ecosystem_override: str | None = None,
+):
+    ecosystem = ecosystem_override or _infer_ecosystem(lockfile)
     packages = _parse_lockfile(lockfile)
     if not packages:
-        console.print("[yellow]No packages found in lockfile[/yellow]")
+        payload = {
+            "lockfile": lockfile,
+            "ecosystem": ecosystem,
+            "packages": [],
+            "summary": {
+                "total": 0,
+                "safe": 0,
+                "suspicious": 0,
+                "malicious": 0,
+                "errors": 0,
+            },
+            "exit_code": 0,
+        }
+        if use_json:
+            _print_json(payload)
+        else:
+            console.print("[yellow]No packages found in lockfile[/yellow]")
         return
 
     config = Config.load()
-    console.print(f"Scanning {len(packages)} packages from {lockfile} ({ecosystem})...")
-    flagged = 0
+    if not use_json:
+        console.print(f"Scanning {len(packages)} packages from {lockfile} ({ecosystem})...")
 
+    results = []
     for name, version in packages:
-        try:
-            package = await resolve_package(name, version, ecosystem)
-            prefilter = run_prefilter(package, config)
-            if prefilter.risk_signals:
-                flagged += 1
-                status = (
-                    "[yellow]REVIEW[/yellow]" if prefilter.needs_ai_review else "[dim]LOW[/dim]"
-                )
-                console.print(f"  {status} {name}=={version}: {prefilter.reason}")
-            else:
-                console.print(f"  [green]OK[/green] {name}=={version}")
-        except Exception as e:
-            console.print(f"  [red]ERROR[/red] {name}: {e}")
+        result = await _scan_dependency(name, version, ecosystem, config, skip_ai)
+        results.append(result)
+        if not use_json:
+            _print_scan_result(result)
 
-    console.print(f"\nScanned {len(packages)} packages, {flagged} flagged for review.")
+    summary = _scan_summary(results)
+    exit_code = _aggregate_scan_exit_code(results)
+    payload = {
+        "lockfile": lockfile,
+        "ecosystem": ecosystem,
+        "packages": [_scan_result_payload(result) for result in results],
+        "summary": summary,
+        "exit_code": exit_code,
+    }
+
+    if use_json:
+        _print_json(payload)
+    else:
+        console.print(
+            f"\nScanned {summary['total']} packages, "
+            f"{summary['suspicious'] + summary['malicious']} flagged for review."
+        )
+
+    if exit_code != 0:
+        sys.exit(exit_code)
 
 
 @main.command()
@@ -340,6 +380,43 @@ def _strip_version_prefix(path: str) -> str:
     return parts[1] if len(parts) > 1 else path
 
 
+@main.command("install-hooks")
+@click.option(
+    "--tool",
+    "-t",
+    "tools",
+    multiple=True,
+    required=True,
+    type=click.Choice(["claude", "gemini", "codex", "cursor", "windsurf", "aider", "all"]),
+    help="AI tool to install hooks for (repeatable, or 'all')",
+)
+@click.option(
+    "--project-dir",
+    "-d",
+    default=".",
+    type=click.Path(exists=True, file_okay=False),
+    help="Project directory (default: current directory)",
+)
+def install_hooks(tools: tuple[str, ...], project_dir: str):
+    """Install aigate PreToolUse hooks into AI coding tool configs.
+
+    Example: aigate install-hooks --tool claude --tool gemini
+    """
+    from pathlib import Path
+
+    from .hook_installer import install_hooks as _install
+
+    target = Path(project_dir).resolve()
+    messages = _install(list(tools), target)
+    for msg in messages:
+        if msg.startswith("(skip)"):
+            console.print(f"[yellow]{msg}[/yellow]")
+        elif msg.startswith("Unknown"):
+            console.print(f"[red]{msg}[/red]")
+        else:
+            console.print(f"[green]{msg}[/green]")
+
+
 @main.command()
 def init():
     """Create a default .aigate.yml configuration file."""
@@ -440,6 +517,8 @@ def _infer_ecosystem(path: str) -> str:
     from pathlib import Path as FilePath
 
     name = FilePath(path).name.lower()
+    if name == "uv.lock":
+        return "pypi"
     if name in ("package-lock.json", "yarn.lock", "pnpm-lock.yaml"):
         return "npm"
     if name == "pubspec.lock":
@@ -448,9 +527,12 @@ def _infer_ecosystem(path: str) -> str:
 
 
 def _parse_lockfile(path: str) -> list[tuple[str, str]]:
-    """Parse requirements.txt or package-lock.json into (name, version) pairs."""
+    """Parse a lockfile into unique (name, version) pairs."""
     import json as json_mod
+    import tomllib
     from pathlib import Path as FilePath
+
+    import yaml
 
     p = FilePath(path)
     packages = []
@@ -468,12 +550,31 @@ def _parse_lockfile(path: str) -> list[tuple[str, str]]:
                 packages.append((name, ""))
             else:
                 packages.append((line, ""))
+    elif p.name == "uv.lock":
+        data = tomllib.loads(p.read_text())
+        for package in data.get("package", []):
+            name = str(package.get("name", "")).strip()
+            version = str(package.get("version", "")).strip()
+            if name:
+                packages.append((name, version))
     elif p.name == "package-lock.json":
         data = json_mod.loads(p.read_text())
-        for name, info in data.get("packages", {}).items():
-            if name and "node_modules/" in name:
-                pkg_name = name.split("node_modules/")[-1]
-                packages.append((pkg_name, info.get("version", "")))
+        if data.get("packages"):
+            for name, info in data.get("packages", {}).items():
+                if name and "node_modules/" in name:
+                    pkg_name = name.split("node_modules/")[-1]
+                    packages.append((pkg_name, info.get("version", "")))
+        else:
+            for name, info in data.get("dependencies", {}).items():
+                packages.append((name, info.get("version", "")))
+    elif p.name == "pnpm-lock.yaml":
+        data = yaml.safe_load(p.read_text()) or {}
+        for key in data.get("packages") or {}:
+            parsed = _parse_pnpm_package_key(key)
+            if parsed:
+                packages.append(parsed)
+    elif p.name == "yarn.lock":
+        packages.extend(_parse_yarn_lock(p.read_text()))
     elif p.name == "pubspec.lock":
         # Basic pubspec.lock parser
         current_name = None
@@ -486,7 +587,201 @@ def _parse_lockfile(path: str) -> list[tuple[str, str]]:
                 packages.append((current_name, ver))
                 current_name = None
 
+    return _dedupe_packages(packages)
+
+
+async def _scan_dependency(
+    name: str,
+    version: str,
+    ecosystem: str,
+    config: Config,
+    skip_ai: bool,
+) -> dict:
+    start = time.monotonic()
+    package = PackageInfo(name=name, version=version, ecosystem=ecosystem)
+
+    try:
+        package = await resolve_package(name, version, ecosystem)
+        source_files = await download_source(package)
+    except Exception as e:
+        report = AnalysisReport(
+            package=package,
+            prefilter=PrefilterResult(
+                passed=False,
+                reason="Package scan failed before analysis",
+            ),
+            total_latency_ms=int((time.monotonic() - start) * 1000),
+        )
+        return {
+            "report": report,
+            "exit_code": 3,
+            "error": str(e),
+        }
+
+    prefilter = run_prefilter(package, config, source_files)
+    consensus = None
+    error = ""
+
+    if not skip_ai and prefilter.needs_ai_review:
+        source_text = _format_source_for_ai(source_files)
+        try:
+            consensus = await run_consensus(
+                package=package,
+                risk_signals=prefilter.risk_signals,
+                source_code=source_text,
+                config=config,
+                level=AnalysisLevel.L1_QUICK,
+            )
+        except Exception as e:
+            error = f"AI analysis failed: {e}"
+
+    report = AnalysisReport(
+        package=package,
+        prefilter=prefilter,
+        consensus=consensus,
+        total_latency_ms=int((time.monotonic() - start) * 1000),
+    )
+    exit_code = 3 if error else _scan_report_exit_code(report)
+    return {
+        "report": report,
+        "exit_code": exit_code,
+        "error": error,
+    }
+
+
+def _scan_report_exit_code(report: AnalysisReport) -> int:
+    if report.consensus:
+        exit_codes = {
+            Verdict.SAFE: 0,
+            Verdict.SUSPICIOUS: 1,
+            Verdict.NEEDS_HUMAN_REVIEW: 1,
+            Verdict.MALICIOUS: 2,
+            Verdict.ERROR: 3,
+        }
+        return exit_codes.get(report.consensus.final_verdict, 3)
+
+    if report.prefilter.risk_level in (RiskLevel.HIGH, RiskLevel.CRITICAL):
+        return 2
+    if report.prefilter.risk_level == RiskLevel.MEDIUM:
+        return 1
+    return 0
+
+
+def _aggregate_scan_exit_code(results: list[dict]) -> int:
+    exit_codes = [result["exit_code"] for result in results]
+    if any(code == 3 for code in exit_codes):
+        return 3
+    if any(code == 2 for code in exit_codes):
+        return 2
+    if any(code == 1 for code in exit_codes):
+        return 1
+    return 0
+
+
+def _scan_summary(results: list[dict]) -> dict[str, int]:
+    summary = {
+        "total": len(results),
+        "safe": 0,
+        "suspicious": 0,
+        "malicious": 0,
+        "errors": 0,
+    }
+    for result in results:
+        code = result["exit_code"]
+        if code == 3:
+            summary["errors"] += 1
+        elif code == 2:
+            summary["malicious"] += 1
+        elif code == 1:
+            summary["suspicious"] += 1
+        else:
+            summary["safe"] += 1
+    return summary
+
+
+def _scan_result_payload(result: dict) -> dict:
+    payload = asdict(result["report"])
+    payload["exit_code"] = result["exit_code"]
+    payload["error"] = result["error"]
+    return payload
+
+
+def _print_scan_result(result: dict) -> None:
+    report: AnalysisReport = result["report"]
+    code = result["exit_code"]
+    package = report.package
+    if code == 3:
+        console.print(f"  [red]ERROR[/red] {package.name}=={package.version}: {result['error']}")
+        return
+
+    if code == 2:
+        status = "[red]MALICIOUS[/red]"
+    elif code == 1:
+        status = "[yellow]REVIEW[/yellow]"
+    else:
+        status = "[green]OK[/green]"
+    console.print(f"  {status} {package.name}=={package.version}: {report.prefilter.reason}")
+
+
+def _print_json(payload: dict) -> None:
+    import json as json_mod
+
+    json_mod.dump(payload, sys.stdout, indent=2, default=str)
+    sys.stdout.write("\n")
+
+
+def _dedupe_packages(packages: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    seen: dict[tuple[str, str], None] = {}
+    for name, version in packages:
+        key = (name.strip(), version.strip())
+        if key[0]:
+            seen.setdefault(key, None)
+    return list(seen)
+
+
+def _parse_pnpm_package_key(key: str) -> tuple[str, str] | None:
+    normalized = str(key).strip().strip("'").strip('"').lstrip("/")
+    normalized = normalized.split("(", 1)[0]
+    if "@" not in normalized[1:]:
+        return None
+    name, version = normalized.rsplit("@", 1)
+    if not name or not version:
+        return None
+    return name, version
+
+
+def _parse_yarn_lock(contents: str) -> list[tuple[str, str]]:
+    packages: list[tuple[str, str]] = []
+    current_names: list[str] = []
+
+    for line in contents.splitlines():
+        if not line.strip():
+            continue
+        if not line.startswith((" ", "\t")):
+            current_names = _parse_yarn_selector_line(line)
+            continue
+        stripped = line.strip()
+        if stripped.startswith("version ") and current_names:
+            version = stripped.split('"', 2)[1]
+            packages.extend((name, version) for name in current_names)
+
     return packages
+
+
+def _parse_yarn_selector_line(line: str) -> list[str]:
+    selectors = line.rstrip(":")
+    names = []
+    for selector in selectors.split(","):
+        spec = selector.strip().strip('"').strip("'")
+        if not spec:
+            continue
+        if spec.startswith("@"):
+            name = spec.rsplit("@", 1)[0]
+        else:
+            name = spec.split("@", 1)[0]
+        if name:
+            names.append(name)
+    return names
 
 
 if __name__ == "__main__":

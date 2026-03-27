@@ -8,12 +8,12 @@ branding:
 
 inputs:
   lockfile:
-    description: "Path to lockfile (requirements.txt, package-lock.json, pubspec.lock)"
+    description: "Path to lockfile (requirements.txt, uv.lock, package-lock.json, yarn.lock, pnpm-lock.yaml, pubspec.lock)"
     required: true
   ecosystem:
-    description: "Package ecosystem (pypi, npm)"
+    description: "Optional package ecosystem override (pypi, npm, pub)"
     required: false
-    default: "pypi"
+    default: ""
   fail-on:
     description: "Fail threshold: malicious, suspicious, or any"
     required: false
@@ -49,7 +49,7 @@ runs:
 
     - name: Install aigate
       shell: bash
-      run: uv pip install --system "aigate @ git+https://github.com/ImL1s/aigate.git@main"
+      run: uv pip install --system "${{ github.action_path }}"
 
     - name: Run aigate scan
       id: scan
@@ -62,12 +62,15 @@ runs:
       run: |
         set +e
 
-        ARGS="scan ${INPUT_LOCKFILE} --json"
+        ARGS=(scan "$INPUT_LOCKFILE" --json)
+        if [ -n "${INPUT_ECOSYSTEM}" ]; then
+          ARGS+=(--ecosystem "$INPUT_ECOSYSTEM")
+        fi
         if [ "${INPUT_SKIP_AI}" = "true" ]; then
-          ARGS="${ARGS} --skip-ai"
+          ARGS+=(--skip-ai)
         fi
 
-        OUTPUT=$(aigate ${ARGS} 2>&1)
+        OUTPUT=$(aigate "${ARGS[@]}")
         EXIT_CODE=$?
 
         echo "exit-code=${EXIT_CODE}" >> "$GITHUB_OUTPUT"
@@ -81,26 +84,30 @@ runs:
 
         # Determine if we should fail the workflow
         SHOULD_FAIL=0
-        case "${INPUT_FAIL_ON}" in
-          malicious)
-            # Only fail on exit code 2 (malicious)
-            if [ ${EXIT_CODE} -eq 2 ]; then
-              SHOULD_FAIL=1
-            fi
-            ;;
-          suspicious)
-            # Fail on exit code 1 (suspicious) or 2 (malicious)
-            if [ ${EXIT_CODE} -eq 1 ] || [ ${EXIT_CODE} -eq 2 ]; then
-              SHOULD_FAIL=1
-            fi
-            ;;
-          any)
-            # Fail on any non-zero exit code
-            if [ ${EXIT_CODE} -ne 0 ]; then
-              SHOULD_FAIL=1
-            fi
-            ;;
-        esac
+        if [ ${EXIT_CODE} -eq 3 ]; then
+          SHOULD_FAIL=1
+        else
+          case "${INPUT_FAIL_ON}" in
+            malicious)
+              # Fail on malicious findings.
+              if [ ${EXIT_CODE} -eq 2 ]; then
+                SHOULD_FAIL=1
+              fi
+              ;;
+            suspicious)
+              # Fail on suspicious or malicious findings.
+              if [ ${EXIT_CODE} -eq 1 ] || [ ${EXIT_CODE} -eq 2 ]; then
+                SHOULD_FAIL=1
+              fi
+              ;;
+            any)
+              # Fail on any non-zero exit code.
+              if [ ${EXIT_CODE} -ne 0 ]; then
+                SHOULD_FAIL=1
+              fi
+              ;;
+          esac
+        fi
 
         if [ ${SHOULD_FAIL} -eq 1 ]; then
           echo "::error::aigate detected issues (exit code ${EXIT_CODE}, fail-on=${INPUT_FAIL_ON})"

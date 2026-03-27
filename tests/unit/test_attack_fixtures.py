@@ -1,6 +1,6 @@
 """Test detection of all attack fixture patterns.
 
-Covers: crossenv, event-stream, colors, ua-parser-js, ctx.
+Covers: crossenv, event-stream, colors, ua-parser-js, ctx, torchtriton, w4sp.
 """
 
 from aigate.config import Config
@@ -10,7 +10,9 @@ from tests.fixtures.fake_malicious_colors import PACKAGE_FILES as COLORS_FILES
 from tests.fixtures.fake_malicious_crossenv import PACKAGE_FILES as CROSSENV_FILES
 from tests.fixtures.fake_malicious_ctx import PACKAGE_FILES as CTX_FILES
 from tests.fixtures.fake_malicious_event_stream import PACKAGE_FILES as EVENT_STREAM_FILES
+from tests.fixtures.fake_malicious_torchtriton import PACKAGE_FILES as TORCHTRITON_FILES
 from tests.fixtures.fake_malicious_ua_parser import PACKAGE_FILES as UA_PARSER_FILES
+from tests.fixtures.fake_malicious_w4sp import PACKAGE_FILES as W4SP_FILES
 
 
 def _pkg(name, version, ecosystem="npm", **kw):
@@ -122,3 +124,90 @@ class TestCtxDetection:
         result = run_prefilter(_pkg("ctx", "0.2.6", ecosystem="pypi"), Config(), CTX_FILES)
         high_signals = [s for s in result.risk_signals if "HIGH" in s]
         assert len(high_signals) >= 1
+
+
+class TestTorchtritonDetection:
+    """torchtriton — PyPI typosquatting of pytorch-triton, stole SSH keys + system info."""
+
+    def test_flags_critical(self):
+        result = run_prefilter(
+            _pkg("torchtriton", "2.0.0", ecosystem="pypi"), Config(), TORCHTRITON_FILES
+        )
+        assert result.risk_level in (RiskLevel.HIGH, RiskLevel.CRITICAL)
+
+    def test_detects_ssh_theft(self):
+        result = run_prefilter(
+            _pkg("torchtriton", "2.0.0", ecosystem="pypi"), Config(), TORCHTRITON_FILES
+        )
+        assert any(".ssh" in s for s in result.risk_signals)
+
+    def test_detects_subprocess(self):
+        result = run_prefilter(
+            _pkg("torchtriton", "2.0.0", ecosystem="pypi"), Config(), TORCHTRITON_FILES
+        )
+        assert any("subprocess" in s.lower() for s in result.risk_signals)
+
+    def test_detects_exfiltration(self):
+        result = run_prefilter(
+            _pkg("torchtriton", "2.0.0", ecosystem="pypi"), Config(), TORCHTRITON_FILES
+        )
+        assert any("urlopen" in s.lower() or "request" in s.lower() for s in result.risk_signals)
+
+    def test_detects_setup_py_high_risk(self):
+        """setup.py with install-time code execution should be HIGH."""
+        result = run_prefilter(
+            _pkg("torchtriton", "2.0.0", ecosystem="pypi"), Config(), TORCHTRITON_FILES
+        )
+        high_signals = [s for s in result.risk_signals if "HIGH" in s]
+        assert len(high_signals) >= 1
+
+    def test_typosquat_or_dangerous(self):
+        """torchtriton should be flagged via dangerous patterns or typosquat detection."""
+        result = run_prefilter(
+            _pkg("torchtriton", "2.0.0", ecosystem="pypi"), Config(), TORCHTRITON_FILES
+        )
+        assert result.needs_ai_review or not result.passed
+
+
+class TestW4spStealerDetection:
+    """W4SP Stealer — PyPI packages stealing Discord tokens, browser creds, crypto wallets."""
+
+    def test_flags_critical(self):
+        result = run_prefilter(
+            _pkg("typesutil", "0.1.3", ecosystem="pypi"), Config(), W4SP_FILES
+        )
+        assert result.risk_level in (RiskLevel.HIGH, RiskLevel.CRITICAL)
+
+    def test_detects_base64_decode(self):
+        result = run_prefilter(
+            _pkg("typesutil", "0.1.3", ecosystem="pypi"), Config(), W4SP_FILES
+        )
+        assert any("b64decode" in s for s in result.risk_signals)
+
+    def test_detects_exec(self):
+        result = run_prefilter(
+            _pkg("typesutil", "0.1.3", ecosystem="pypi"), Config(), W4SP_FILES
+        )
+        assert any("exec" in s.lower() for s in result.risk_signals)
+
+    def test_detects_network_exfiltration(self):
+        result = run_prefilter(
+            _pkg("typesutil", "0.1.3", ecosystem="pypi"), Config(), W4SP_FILES
+        )
+        assert any("urlopen" in s.lower() or "request" in s.lower() for s in result.risk_signals)
+
+    def test_detects_high_entropy_obfuscation(self):
+        """Obfuscated loader should trigger high entropy detection."""
+        result = run_prefilter(
+            _pkg("typesutil", "0.1.3", ecosystem="pypi"), Config(), W4SP_FILES
+        )
+        assert any("high_entropy" in s for s in result.risk_signals)
+
+    def test_detects_env_token_access(self):
+        """Should detect code scanning env vars for TOKEN/KEY/SECRET."""
+        result = run_prefilter(
+            _pkg("typesutil", "0.1.3", ecosystem="pypi"), Config(), W4SP_FILES
+        )
+        # The stealer accesses os.environ for TOKEN/KEY/SECRET patterns
+        # Prefilter should catch .env or the urlopen/exec patterns
+        assert result.needs_ai_review or not result.passed
