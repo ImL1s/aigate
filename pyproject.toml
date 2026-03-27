@@ -39,6 +39,7 @@ dev = [
 
 [project.scripts]
 aigate = "aigate.cli:main"
+aigate-npm = "aigate.hooks.npm_hook:npm_wrapper"
 
 [project.urls]
 Homepage = "https://github.com/anthropics/aigate"

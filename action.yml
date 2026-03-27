@@ -1,0 +1,147 @@
+name: "aigate dependency scan"
+description: "Scan lockfile dependencies for malicious packages using AI multi-model consensus"
+author: "ImL1s"
+
+branding:
+  icon: "shield"
+  color: "red"
+
+inputs:
+  lockfile:
+    description: "Path to lockfile (requirements.txt, package-lock.json, pubspec.lock)"
+    required: true
+  ecosystem:
+    description: "Package ecosystem (pypi, npm)"
+    required: false
+    default: "pypi"
+  fail-on:
+    description: "Fail threshold: malicious, suspicious, or any"
+    required: false
+    default: "malicious"
+  skip-ai:
+    description: "Skip AI analysis, only run static pre-filter"
+    required: false
+    default: "true"
+  python-version:
+    description: "Python version to use"
+    required: false
+    default: "3.12"
+
+outputs:
+  exit-code:
+    description: "aigate exit code (0=safe, 1=suspicious, 2=malicious, 3=error)"
+    value: ${{ steps.scan.outputs.exit-code }}
+  report:
+    description: "JSON scan report"
+    value: ${{ steps.scan.outputs.report }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install uv
+      shell: bash
+      run: pip install uv
+
+    - name: Install aigate
+      shell: bash
+      run: uv pip install --system "aigate @ git+https://github.com/ImL1s/aigate.git@main"
+
+    - name: Run aigate scan
+      id: scan
+      shell: bash
+      env:
+        INPUT_LOCKFILE: ${{ inputs.lockfile }}
+        INPUT_ECOSYSTEM: ${{ inputs.ecosystem }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_SKIP_AI: ${{ inputs.skip-ai }}
+      run: |
+        set +e
+
+        ARGS="scan ${INPUT_LOCKFILE} --json"
+        if [ "${INPUT_SKIP_AI}" = "true" ]; then
+          ARGS="${ARGS} --skip-ai"
+        fi
+
+        OUTPUT=$(aigate ${ARGS} 2>&1)
+        EXIT_CODE=$?
+
+        echo "exit-code=${EXIT_CODE}" >> "$GITHUB_OUTPUT"
+        echo "report<<AIGATE_EOF" >> "$GITHUB_OUTPUT"
+        echo "${OUTPUT}" >> "$GITHUB_OUTPUT"
+        echo "AIGATE_EOF" >> "$GITHUB_OUTPUT"
+
+        echo "::group::aigate scan results"
+        echo "${OUTPUT}"
+        echo "::endgroup::"
+
+        # Determine if we should fail the workflow
+        SHOULD_FAIL=0
+        case "${INPUT_FAIL_ON}" in
+          malicious)
+            # Only fail on exit code 2 (malicious)
+            if [ ${EXIT_CODE} -eq 2 ]; then
+              SHOULD_FAIL=1
+            fi
+            ;;
+          suspicious)
+            # Fail on exit code 1 (suspicious) or 2 (malicious)
+            if [ ${EXIT_CODE} -eq 1 ] || [ ${EXIT_CODE} -eq 2 ]; then
+              SHOULD_FAIL=1
+            fi
+            ;;
+          any)
+            # Fail on any non-zero exit code
+            if [ ${EXIT_CODE} -ne 0 ]; then
+              SHOULD_FAIL=1
+            fi
+            ;;
+        esac
+
+        if [ ${SHOULD_FAIL} -eq 1 ]; then
+          echo "::error::aigate detected issues (exit code ${EXIT_CODE}, fail-on=${INPUT_FAIL_ON})"
+          exit 1
+        fi
+
+    - name: Add summary
+      if: always()
+      shell: bash
+      env:
+        SCAN_EXIT_CODE: ${{ steps.scan.outputs.exit-code }}
+        INPUT_LOCKFILE: ${{ inputs.lockfile }}
+      run: |
+        if [ "${SCAN_EXIT_CODE}" = "0" ]; then
+          STATUS="All dependencies passed"
+          ICON="white_check_mark"
+        elif [ "${SCAN_EXIT_CODE}" = "1" ]; then
+          STATUS="Suspicious packages detected"
+          ICON="warning"
+        elif [ "${SCAN_EXIT_CODE}" = "2" ]; then
+          STATUS="Malicious packages detected"
+          ICON="x"
+        else
+          STATUS="Scan encountered errors"
+          ICON="question"
+        fi
+
+        cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+        ## :${ICON}: aigate scan — ${STATUS}
+
+        | Key | Value |
+        |-----|-------|
+        | Lockfile | \`${INPUT_LOCKFILE}\` |
+        | Exit code | \`${SCAN_EXIT_CODE}\` |
+
+        <details>
+        <summary>Full report</summary>
+
+        \`\`\`
+        ${{ steps.scan.outputs.report }}
+        \`\`\`
+
+        </details>
+        EOF
