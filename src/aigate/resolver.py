@@ -36,10 +36,7 @@ async def _resolve_pypi(name: str, version: str | None) -> PackageInfo:
 
     info = data["info"]
     latest_version = version or info.get("version", "")
-    has_scripts = any(
-        url_info.get("packagetype") == "sdist"
-        for url_info in data.get("urls", [])
-    )
+    has_scripts = any(url_info.get("packagetype") == "sdist" for url_info in data.get("urls", []))
 
     return PackageInfo(
         name=name,
@@ -157,8 +154,21 @@ def _extract_archive(content: bytes, filename: str) -> dict[str, str]:
     """Extract text files from tar.gz or zip/whl archive."""
     files: dict[str, str] = {}
     text_extensions = {
-        ".py", ".js", ".ts", ".json", ".yaml", ".yml", ".toml", ".cfg",
-        ".ini", ".txt", ".md", ".rst", ".sh", ".bat", ".pth",
+        ".py",
+        ".js",
+        ".ts",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".cfg",
+        ".ini",
+        ".txt",
+        ".md",
+        ".rst",
+        ".sh",
+        ".bat",
+        ".pth",
     }
     max_file_size = 512 * 1024  # 512KB per file
 

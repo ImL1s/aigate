@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 
-class Verdict(str, Enum):
+class Verdict(StrEnum):
     SAFE = "safe"
     SUSPICIOUS = "suspicious"
     MALICIOUS = "malicious"
@@ -15,7 +15,7 @@ class Verdict(str, Enum):
     ERROR = "error"
 
 
-class RiskLevel(str, Enum):
+class RiskLevel(StrEnum):
     NONE = "none"
     LOW = "low"
     MEDIUM = "medium"
@@ -23,7 +23,7 @@ class RiskLevel(str, Enum):
     CRITICAL = "critical"
 
 
-class AnalysisLevel(str, Enum):
+class AnalysisLevel(StrEnum):
     L1_QUICK = "l1_quick"
     L2_DEEP = "l2_deep"
     L3_EXPERT = "l3_expert"

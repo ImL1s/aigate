@@ -8,7 +8,6 @@ from abc import ABC, abstractmethod
 
 from ..models import AnalysisLevel, ModelResult, Verdict
 
-
 ANALYSIS_PROMPT_TEMPLATE = """\
 You are a software supply chain security analyst. Analyze the following package \
 for potential malicious behavior.
@@ -137,6 +136,7 @@ class AIBackend(ABC):
         )
 
         import time
+
         start = time.monotonic()
         raw = await self.analyze(prompt, level)
         latency = int((time.monotonic() - start) * 1000)
@@ -172,6 +172,7 @@ class AIBackend(ABC):
         )
 
         import time
+
         start = time.monotonic()
         raw = await self.analyze(prompt, level)
         latency = int((time.monotonic() - start) * 1000)
@@ -182,8 +183,8 @@ class AIBackend(ABC):
 def _truncate(text: str, level: AnalysisLevel) -> str:
     """Truncate source code based on analysis level token budget."""
     limits = {
-        AnalysisLevel.L1_QUICK: 4000,    # ~2K tokens
-        AnalysisLevel.L2_DEEP: 16000,    # ~8K tokens
+        AnalysisLevel.L1_QUICK: 4000,  # ~2K tokens
+        AnalysisLevel.L2_DEEP: 16000,  # ~8K tokens
         AnalysisLevel.L3_EXPERT: 64000,  # ~32K tokens
     }
     limit = limits.get(level, 4000)

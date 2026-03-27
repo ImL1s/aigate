@@ -1,6 +1,6 @@
 """Output reporters for aigate."""
 
-from .terminal import TerminalReporter
 from .json_reporter import JsonReporter
+from .terminal import TerminalReporter
 
 __all__ = ["TerminalReporter", "JsonReporter"]

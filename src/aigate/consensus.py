@@ -6,10 +6,10 @@ import asyncio
 import statistics
 
 from .backends.base import AIBackend
-from .config import Config, ModelConfig
 from .backends.claude import ClaudeBackend
 from .backends.gemini import GeminiBackend
 from .backends.ollama import OllamaBackend
+from .config import Config, ModelConfig
 from .models import (
     AnalysisLevel,
     ConsensusResult,
@@ -58,7 +58,7 @@ async def run_consensus(
     for mc in enabled_models:
         try:
             backends.append((mc, create_backend(mc)))
-        except ValueError as e:
+        except ValueError:
             # Skip unavailable backends
             pass
 
@@ -189,7 +189,9 @@ def _aggregate_votes(
     unique_signals = list(dict.fromkeys(all_signals))
 
     # Build summary
-    model_verdicts = ", ".join(f"{r.model_name}={r.verdict.value}({r.confidence:.0%})" for r in valid)
+    model_verdicts = ", ".join(
+        f"{r.model_name}={r.verdict.value}({r.confidence:.0%})" for r in valid
+    )
     summary = f"Consensus: {final.value} | Models: [{model_verdicts}]"
 
     # Recommendation

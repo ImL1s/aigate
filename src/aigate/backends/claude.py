@@ -25,10 +25,14 @@ class ClaudeBackend(AIBackend):
 
         cmd = [
             self._binary,
-            "-p", prompt,
-            "--model", self.model_id,
-            "--output-format", "text",
-            "--max-turns", "1",
+            "-p",
+            prompt,
+            "--model",
+            self.model_id,
+            "--output-format",
+            "text",
+            "--max-turns",
+            "1",
         ]
 
         proc = await asyncio.create_subprocess_exec(
@@ -37,10 +41,8 @@ class ClaudeBackend(AIBackend):
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=self.timeout
-            )
-        except asyncio.TimeoutError:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=self.timeout)
+        except TimeoutError:
             proc.kill()
             raise RuntimeError(f"Claude analysis timed out after {self.timeout}s")
 

@@ -12,18 +12,64 @@ from .models import PackageInfo, PrefilterResult, RiskLevel
 
 # Top 1000 PyPI packages (abbreviated — expanded at runtime from cache)
 POPULAR_PYPI: set[str] = {
-    "requests", "numpy", "pandas", "flask", "django", "boto3", "urllib3",
-    "setuptools", "pip", "wheel", "pyyaml", "cryptography", "certifi",
-    "click", "rich", "httpx", "pydantic", "fastapi", "sqlalchemy",
-    "pytest", "black", "ruff", "mypy", "pillow", "scipy", "matplotlib",
-    "torch", "tensorflow", "transformers", "openai", "anthropic",
-    "litellm", "langchain", "crewai", "dspy",
+    "requests",
+    "numpy",
+    "pandas",
+    "flask",
+    "django",
+    "boto3",
+    "urllib3",
+    "setuptools",
+    "pip",
+    "wheel",
+    "pyyaml",
+    "cryptography",
+    "certifi",
+    "click",
+    "rich",
+    "httpx",
+    "pydantic",
+    "fastapi",
+    "sqlalchemy",
+    "pytest",
+    "black",
+    "ruff",
+    "mypy",
+    "pillow",
+    "scipy",
+    "matplotlib",
+    "torch",
+    "tensorflow",
+    "transformers",
+    "openai",
+    "anthropic",
+    "litellm",
+    "langchain",
+    "crewai",
+    "dspy",
 }
 
 POPULAR_NPM: set[str] = {
-    "express", "react", "vue", "angular", "next", "typescript", "lodash",
-    "axios", "webpack", "babel", "eslint", "prettier", "jest", "mocha",
-    "chalk", "commander", "inquirer", "debug", "moment", "dayjs",
+    "express",
+    "react",
+    "vue",
+    "angular",
+    "next",
+    "typescript",
+    "lodash",
+    "axios",
+    "webpack",
+    "babel",
+    "eslint",
+    "prettier",
+    "jest",
+    "mocha",
+    "chalk",
+    "commander",
+    "inquirer",
+    "debug",
+    "moment",
+    "dayjs",
 }
 
 # Known dangerous patterns in install scripts
@@ -205,10 +251,7 @@ def _shannon_entropy(text: str) -> float:
     for ch in text:
         freq[ch] = freq.get(ch, 0) + 1
     length = len(text)
-    return -sum(
-        (count / length) * math.log2(count / length)
-        for count in freq.values()
-    )
+    return -sum((count / length) * math.log2(count / length) for count in freq.values())
 
 
 def _calculate_risk_level(signals: Sequence[str]) -> RiskLevel:

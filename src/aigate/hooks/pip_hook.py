@@ -11,7 +11,7 @@ from rich.console import Console
 
 from ..config import Config
 from ..consensus import run_consensus
-from ..models import AnalysisLevel
+from ..models import AnalysisLevel, AnalysisReport, Verdict
 from ..prefilter import run_prefilter
 from ..reporters.terminal import TerminalReporter
 from ..resolver import download_source, resolve_package
@@ -67,9 +67,7 @@ async def _check_packages(packages: list[tuple[str, str | None]]) -> list[str]:
                 continue
 
             if prefilter.needs_ai_review:
-                source_text = "\n".join(
-                    f"### {p}\n```\n{c}\n```" for p, c in source_files.items()
-                )
+                source_text = "\n".join(f"### {p}\n```\n{c}\n```" for p, c in source_files.items())
                 result = await run_consensus(
                     package=package,
                     risk_signals=prefilter.risk_signals,
@@ -77,11 +75,10 @@ async def _check_packages(packages: list[tuple[str, str | None]]) -> list[str]:
                     config=config,
                     level=AnalysisLevel.L1_QUICK,
                 )
-                from ..models import Verdict
                 if result.final_verdict == Verdict.MALICIOUS:
                     blocked.append(name)
                     TerminalReporter(console).print_report(
-                        __import__("aigate.models", fromlist=["AnalysisReport"]).AnalysisReport(
+                        AnalysisReport(
                             package=package,
                             prefilter=prefilter,
                             consensus=result,

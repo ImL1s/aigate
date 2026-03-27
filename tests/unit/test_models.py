@@ -1,7 +1,6 @@
 """Tests for data models."""
 
 from aigate.models import (
-    AnalysisLevel,
     ConsensusResult,
     ModelResult,
     PackageInfo,

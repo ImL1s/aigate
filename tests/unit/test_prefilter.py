@@ -135,7 +135,9 @@ class TestRunPrefilter:
         assert result.passed
 
     def test_suspicious_package_needs_ai(self):
-        pkg = _make_pkg(name="testpkg", has_install_scripts=True, author="", repository="", homepage="")
+        pkg = _make_pkg(
+            name="testpkg", has_install_scripts=True, author="", repository="", homepage=""
+        )
         config = Config()
         source = {"setup.py": "exec(base64.b64decode(os.environ['PAYLOAD']))"}
         result = run_prefilter(pkg, config, source)

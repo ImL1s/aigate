@@ -12,7 +12,7 @@ from rich.console import Console
 
 from ..config import Config
 from ..consensus import run_consensus
-from ..models import AnalysisLevel
+from ..models import AnalysisLevel, AnalysisReport, Verdict
 from ..prefilter import run_prefilter
 from ..reporters.terminal import TerminalReporter
 from ..resolver import download_source, resolve_package
@@ -53,10 +53,7 @@ def npm_wrapper():
         _passthrough(pm, args)
         return
 
-    console.print(
-        f"[cyan]aigate[/cyan] intercepting {pm} install for "
-        f"{len(packages)} package(s)"
-    )
+    console.print(f"[cyan]aigate[/cyan] intercepting {pm} install for {len(packages)} package(s)")
 
     blocked = asyncio.run(_check_packages(packages))
     if blocked:
@@ -68,9 +65,7 @@ def npm_wrapper():
         console.print(f"\nTo override, use: {pm} install --no-aigate <package>")
         sys.exit(2)
 
-    console.print(
-        "[green]All packages passed security check. Proceeding with install...[/green]\n"
-    )
+    console.print("[green]All packages passed security check. Proceeding with install...[/green]\n")
     _passthrough(pm, args)
 
 
@@ -93,9 +88,7 @@ async def _check_packages(packages: list[tuple[str, str | None]]) -> list[str]:
                 continue
 
             if prefilter.needs_ai_review:
-                source_text = "\n".join(
-                    f"### {p}\n```\n{c}\n```" for p, c in source_files.items()
-                )
+                source_text = "\n".join(f"### {p}\n```\n{c}\n```" for p, c in source_files.items())
                 result = await run_consensus(
                     package=package,
                     risk_signals=prefilter.risk_signals,
@@ -103,14 +96,10 @@ async def _check_packages(packages: list[tuple[str, str | None]]) -> list[str]:
                     config=config,
                     level=AnalysisLevel.L1_QUICK,
                 )
-                from ..models import Verdict
-
                 if result.final_verdict == Verdict.MALICIOUS:
                     blocked.append(name)
                     TerminalReporter(console).print_report(
-                        __import__(
-                            "aigate.models", fromlist=["AnalysisReport"]
-                        ).AnalysisReport(
+                        AnalysisReport(
                             package=package,
                             prefilter=prefilter,
                             consensus=result,

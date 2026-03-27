@@ -26,16 +26,15 @@ class GeminiBackend(AIBackend):
 
         proc = await asyncio.create_subprocess_exec(
             self._binary,
-            "-p", prompt,
+            "-p",
+            prompt,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=self.timeout
-            )
-        except asyncio.TimeoutError:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=self.timeout)
+        except TimeoutError:
             proc.kill()
             raise RuntimeError(f"Gemini analysis timed out after {self.timeout}s")
 

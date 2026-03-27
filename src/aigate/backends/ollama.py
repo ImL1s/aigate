@@ -45,6 +45,4 @@ class OllamaBackend(AIBackend):
                     "Is Ollama running? Start with: ollama serve"
                 )
             except httpx.TimeoutException:
-                raise RuntimeError(
-                    f"Ollama analysis timed out after {self.timeout}s"
-                )
+                raise RuntimeError(f"Ollama analysis timed out after {self.timeout}s")

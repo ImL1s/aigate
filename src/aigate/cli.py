@@ -10,9 +10,10 @@ import click
 from rich.console import Console
 
 from . import __version__
+from .cache import get_cached, set_cached
 from .config import Config
 from .consensus import run_consensus
-from .models import AnalysisLevel, AnalysisReport, PackageInfo, PrefilterResult, RiskLevel
+from .models import AnalysisLevel, AnalysisReport, PrefilterResult, RiskLevel, Verdict
 from .prefilter import run_prefilter
 from .reporters.json_reporter import JsonReporter
 from .reporters.terminal import TerminalReporter
@@ -32,12 +33,17 @@ def main():
 @click.argument("package")
 @click.option("--version", "-v", "pkg_version", default=None, help="Package version")
 @click.option(
-    "--ecosystem", "-e", default="pypi", type=click.Choice(["pypi", "npm"]),
+    "--ecosystem",
+    "-e",
+    default="pypi",
+    type=click.Choice(["pypi", "npm"]),
     help="Package ecosystem",
 )
 @click.option("--json", "use_json", is_flag=True, help="Output as JSON")
 @click.option(
-    "--level", "-l", default="l1_quick",
+    "--level",
+    "-l",
+    default="l1_quick",
     type=click.Choice(["l1_quick", "l2_deep", "l3_expert"]),
     help="Analysis depth",
 )
@@ -77,6 +83,31 @@ async def _check(
             console.print(f"[red]Failed to resolve package: {e}[/red]")
             sys.exit(1)
 
+    # 1.5 Check cache
+    cached = get_cached(
+        package.name,
+        package.version,
+        ecosystem,
+        config.cache_dir,
+        config.cache_ttl_hours,
+    )
+    if cached and skip_ai:
+        total_ms = int((time.monotonic() - start) * 1000)
+        console.print("[dim](cached result)[/dim]")
+        report = AnalysisReport(
+            package=package,
+            prefilter=PrefilterResult(
+                passed=cached.get("prefilter", {}).get("passed", True),
+                reason=cached.get("prefilter", {}).get("reason", "cached"),
+                risk_level=RiskLevel(cached.get("prefilter", {}).get("risk_level", "none")),
+            ),
+            cached=True,
+            total_latency_ms=total_ms,
+        )
+        reporter = JsonReporter() if use_json else TerminalReporter(console)
+        reporter.print_report(report)
+        return
+
     # 2. Download source
     with console.status(f"Downloading {package.name}=={package.version}..."):
         try:
@@ -104,7 +135,6 @@ async def _check(
             except Exception as e:
                 console.print(f"[yellow]AI analysis failed: {e}[/yellow]")
     elif not skip_ai and not prefilter_result.passed:
-        # Blocked by pre-filter (blocklist)
         pass
     elif skip_ai and prefilter_result.risk_signals:
         console.print("[dim]AI analysis skipped (--skip-ai)[/dim]")
@@ -118,13 +148,15 @@ async def _check(
         total_latency_ms=total_ms,
     )
 
-    # 5. Output
+    # 5. Cache result
+    set_cached(package.name, package.version, ecosystem, report, config.cache_dir)
+
+    # 6. Output
     reporter = JsonReporter() if use_json else TerminalReporter(console)
     reporter.print_report(report)
 
     # Exit code: 0=safe, 1=suspicious/review, 2=malicious, 3=error
     if consensus_result:
-        from .models import Verdict
         exit_codes = {
             Verdict.SAFE: 0,
             Verdict.SUSPICIOUS: 1,
@@ -150,21 +182,25 @@ def scan(lockfile: str, use_json: bool, skip_ai: bool):
 
 
 async def _scan(lockfile: str, use_json: bool, skip_ai: bool):
+    ecosystem = _infer_ecosystem(lockfile)
     packages = _parse_lockfile(lockfile)
     if not packages:
         console.print("[yellow]No packages found in lockfile[/yellow]")
         return
 
-    console.print(f"Scanning {len(packages)} packages from {lockfile}...")
+    config = Config.load()
+    console.print(f"Scanning {len(packages)} packages from {lockfile} ({ecosystem})...")
     flagged = 0
 
     for name, version in packages:
         try:
-            package = await resolve_package(name, version, "pypi")
-            prefilter = run_prefilter(package, Config.load())
+            package = await resolve_package(name, version, ecosystem)
+            prefilter = run_prefilter(package, config)
             if prefilter.risk_signals:
                 flagged += 1
-                status = "[yellow]REVIEW[/yellow]" if prefilter.needs_ai_review else "[dim]LOW[/dim]"
+                status = (
+                    "[yellow]REVIEW[/yellow]" if prefilter.needs_ai_review else "[dim]LOW[/dim]"
+                )
                 console.print(f"  {status} {name}=={version}: {prefilter.reason}")
             else:
                 console.print(f"  [green]OK[/green] {name}=={version}")
@@ -172,6 +208,122 @@ async def _scan(lockfile: str, use_json: bool, skip_ai: bool):
             console.print(f"  [red]ERROR[/red] {name}: {e}")
 
     console.print(f"\nScanned {len(packages)} packages, {flagged} flagged for review.")
+
+
+@main.command()
+@click.argument("package")
+@click.argument("old_version")
+@click.argument("new_version")
+@click.option(
+    "--ecosystem",
+    "-e",
+    default="pypi",
+    type=click.Choice(["pypi", "npm"]),
+    help="Package ecosystem",
+)
+@click.option("--json", "use_json", is_flag=True, help="Output as JSON")
+@click.option("--skip-ai", is_flag=True, help="Only run static pre-filter")
+def diff(
+    package: str,
+    old_version: str,
+    new_version: str,
+    ecosystem: str,
+    use_json: bool,
+    skip_ai: bool,
+):
+    """Compare two versions of a package for suspicious changes.
+
+    Example: aigate diff litellm 1.82.6 1.82.8
+    """
+    asyncio.run(_diff(package, old_version, new_version, ecosystem, use_json, skip_ai))
+
+
+async def _diff(
+    package_name: str,
+    old_ver: str,
+    new_ver: str,
+    ecosystem: str,
+    use_json: bool,
+    skip_ai: bool,
+):
+    config = Config.load()
+    start = time.monotonic()
+
+    # Resolve and download both versions in parallel
+    with console.status(f"Downloading {package_name} {old_ver} and {new_ver}..."):
+        try:
+            old_pkg = await resolve_package(package_name, old_ver, ecosystem)
+            new_pkg = await resolve_package(package_name, new_ver, ecosystem)
+            old_files, new_files = await asyncio.gather(
+                download_source(old_pkg),
+                download_source(new_pkg),
+            )
+        except Exception as e:
+            console.print(f"[red]Failed: {e}[/red]")
+            sys.exit(1)
+
+    # Compute diff: files only in new or changed
+    added_files: dict[str, str] = {}
+    changed_files: dict[str, str] = {}
+    for path, content in new_files.items():
+        # Normalize paths (strip version prefix)
+        norm = _strip_version_prefix(path)
+        old_norm = {_strip_version_prefix(k): v for k, v in old_files.items()}
+        if norm not in old_norm:
+            added_files[path] = content
+        elif old_norm[norm] != content:
+            changed_files[path] = content
+
+    diff_files = {**added_files, **changed_files}
+    console.print(f"  {len(added_files)} new files, {len(changed_files)} changed files")
+
+    # Run prefilter on diff files only
+    prefilter_result = run_prefilter(new_pkg, config, diff_files)
+
+    # AI analysis on diff
+    consensus_result = None
+    if not skip_ai and prefilter_result.needs_ai_review:
+        source_text = _format_source_for_ai(diff_files)
+        with console.status("Running AI diff analysis..."):
+            try:
+                consensus_result = await run_consensus(
+                    package=new_pkg,
+                    risk_signals=prefilter_result.risk_signals,
+                    source_code=source_text,
+                    config=config,
+                    level=AnalysisLevel.L2_DEEP,
+                )
+            except Exception as e:
+                console.print(f"[yellow]AI analysis failed: {e}[/yellow]")
+
+    total_ms = int((time.monotonic() - start) * 1000)
+    report = AnalysisReport(
+        package=new_pkg,
+        prefilter=prefilter_result,
+        consensus=consensus_result,
+        total_latency_ms=total_ms,
+    )
+
+    reporter = JsonReporter() if use_json else TerminalReporter(console)
+    reporter.print_report(report)
+
+    if consensus_result:
+        exit_codes = {
+            Verdict.SAFE: 0,
+            Verdict.SUSPICIOUS: 1,
+            Verdict.NEEDS_HUMAN_REVIEW: 1,
+            Verdict.MALICIOUS: 2,
+            Verdict.ERROR: 3,
+        }
+        sys.exit(exit_codes.get(consensus_result.final_verdict, 0))
+    elif not prefilter_result.passed:
+        sys.exit(2)
+
+
+def _strip_version_prefix(path: str) -> str:
+    """Strip 'package-version/' prefix from archive paths."""
+    parts = path.split("/", 1)
+    return parts[1] if len(parts) > 1 else path
 
 
 @main.command()
@@ -244,9 +396,14 @@ output_format: rich  # rich | json | sarif
 def _format_source_for_ai(source_files: dict[str, str]) -> str:
     """Format source files for AI prompt, prioritizing risky files."""
     priority_patterns = [
-        "setup.py", "setup.cfg", "pyproject.toml",
-        "package.json", "postinstall", "preinstall",
-        ".pth", "__init__.py",
+        "setup.py",
+        "setup.cfg",
+        "pyproject.toml",
+        "package.json",
+        "postinstall",
+        "preinstall",
+        ".pth",
+        "__init__.py",
     ]
 
     prioritized = []
@@ -264,12 +421,24 @@ def _format_source_for_ai(source_files: dict[str, str]) -> str:
     return "\n".join(parts)
 
 
+def _infer_ecosystem(path: str) -> str:
+    """Infer package ecosystem from lockfile name."""
+    from pathlib import Path as FilePath
+
+    name = FilePath(path).name.lower()
+    if name in ("package-lock.json", "yarn.lock", "pnpm-lock.yaml"):
+        return "npm"
+    if name == "pubspec.lock":
+        return "pub"
+    return "pypi"
+
+
 def _parse_lockfile(path: str) -> list[tuple[str, str]]:
     """Parse requirements.txt or package-lock.json into (name, version) pairs."""
     import json as json_mod
-    from pathlib import Path as P
+    from pathlib import Path as FilePath
 
-    p = P(path)
+    p = FilePath(path)
     packages = []
 
     if p.name == "requirements.txt" or p.suffix == ".txt":
