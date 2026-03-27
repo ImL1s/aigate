@@ -119,10 +119,24 @@ async def _check(
     # 3. Static pre-filter
     prefilter_result = run_prefilter(package, config, source_files)
 
+    # 3.5 Enrichment (optional — adds context to AI prompt)
+    enrichment_section = ""
+    if config.enrichment.enabled and not skip_ai and prefilter_result.needs_ai_review:
+        from .enrichment import run_enrichment
+
+        with console.status("Gathering external intelligence..."):
+            try:
+                enrichment = await run_enrichment(package, config.enrichment)
+                enrichment_section = enrichment.to_prompt_section()
+            except Exception as e:
+                console.print(f"[dim]Enrichment failed: {e}[/dim]")
+
     # 4. AI analysis (if needed and not skipped)
     consensus_result = None
     if not skip_ai and prefilter_result.needs_ai_review:
         source_text = _format_source_for_ai(source_files)
+        if enrichment_section:
+            source_text = enrichment_section + "\n\n" + source_text
         with console.status("Running AI analysis..."):
             try:
                 consensus_result = await run_consensus(

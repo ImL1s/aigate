@@ -8,6 +8,8 @@ from typing import Any
 
 import yaml
 
+from .enrichment import Context7Config, EnrichmentConfig, OsvConfig, WebSearchConfig
+
 DEFAULT_CONFIG_NAME = ".aigate.yml"
 
 
@@ -40,6 +42,7 @@ class Config:
     max_analysis_level: str = "l2_deep"  # l1_quick, l2_deep, l3_expert
     output_format: str = "rich"  # rich, json, sarif
     ecosystems: list[str] = field(default_factory=lambda: ["pypi", "npm"])
+    enrichment: EnrichmentConfig = field(default_factory=EnrichmentConfig)
 
     @classmethod
     def default(cls) -> Config:
@@ -120,4 +123,26 @@ def _parse_config(path: Path) -> Config:
         max_analysis_level=raw.get("max_analysis_level", "l2_deep"),
         output_format=raw.get("output_format", "rich"),
         ecosystems=raw.get("ecosystems", ["pypi", "npm"]),
+        enrichment=_parse_enrichment(raw.get("enrichment", {})),
+    )
+
+
+def _parse_enrichment(raw: dict | None) -> EnrichmentConfig:
+    if not raw:
+        return EnrichmentConfig()
+    return EnrichmentConfig(
+        enabled=raw.get("enabled", False),
+        context7=Context7Config(
+            enabled=raw.get("context7", {}).get("enabled", False),
+            api_key_env=raw.get("context7", {}).get("api_key_env", "CONTEXT7_API_KEY"),
+        ),
+        web_search=WebSearchConfig(
+            enabled=raw.get("web_search", {}).get("enabled", False),
+            provider=raw.get("web_search", {}).get("provider", "brightdata"),
+            api_key_env=raw.get("web_search", {}).get("api_key_env", "BRIGHT_DATA_API_KEY"),
+        ),
+        osv=OsvConfig(
+            enabled=raw.get("osv", {}).get("enabled", True),
+        ),
+        timeout_seconds=raw.get("timeout_seconds", 10),
     )
