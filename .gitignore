@@ -9,3 +9,4 @@ build/
 .omc/
 *.egg
 .aigate.yml
+CLAUDE.local.md

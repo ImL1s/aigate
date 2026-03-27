@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath' | { read -r f; [[ \"$f\" == *.py ]] && /Users/iml1s/Documents/mine/aigate/.venv/bin/ruff format \"$f\" 2>/dev/null; } || true",
+            "timeout": 10,
+            "statusMessage": "Formatting..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"additionalContext\":\"Reminder: run /verify before committing.\"}}'",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
