@@ -923,12 +923,17 @@ def _print_report_and_exit(
     use_json: bool,
     use_sarif: bool = False,
 ) -> None:
+    quiet = False
+    ctx = click.get_current_context(silent=True)
+    if ctx and ctx.obj:
+        quiet = ctx.obj.get("quiet", False)
+
     if use_sarif:
         reporter = SarifReporter()
     elif use_json:
         reporter = JsonReporter()
     else:
-        reporter = TerminalReporter(console)
+        reporter = TerminalReporter(console, quiet=quiet)
     reporter.print_report(report)
     sys.exit(decision_from_report(report).exit_code)
 

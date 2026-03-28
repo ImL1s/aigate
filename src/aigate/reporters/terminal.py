@@ -8,6 +8,7 @@ from rich.table import Table
 from rich.text import Text
 
 from ..models import AnalysisReport, Verdict
+from ..policy import decision_from_report
 
 VERDICT_STYLES = {
     Verdict.SAFE: ("bold green", "SAFE"),
@@ -19,10 +20,20 @@ VERDICT_STYLES = {
 
 
 class TerminalReporter:
-    def __init__(self, console: Console | None = None):
+    def __init__(self, console: Console | None = None, quiet: bool = False):
         self.console = console or Console()
+        self._quiet = quiet
 
     def print_report(self, report: AnalysisReport) -> None:
+        if self._quiet:
+            decision = decision_from_report(report)
+            pkg = report.package
+            self.console.print(
+                f"{pkg.name}=={pkg.version}: {decision.outcome}",
+                highlight=False,
+            )
+            return
+
         pkg = report.package
 
         # Header
