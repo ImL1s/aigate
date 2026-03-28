@@ -1,5 +1,7 @@
 # aigate
 
+[![CI](https://github.com/ImL1s/aigate/actions/workflows/ci.yml/badge.svg)](https://github.com/ImL1s/aigate/actions/workflows/ci.yml)
+
 > **Warning**
 > This project is in **Alpha** — not production-ready. APIs may change without notice.
 

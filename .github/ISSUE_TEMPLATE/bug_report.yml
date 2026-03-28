@@ -1,0 +1,83 @@
+name: Bug Report
+description: Report a bug in aigate
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please fill out the sections below so we can reproduce and fix it.
+
+  - type: input
+    id: version
+    attributes:
+      label: aigate version
+      description: Output of `aigate --version`
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: ecosystem
+    attributes:
+      label: Ecosystem
+      description: Which package ecosystem were you scanning?
+      options:
+        - PyPI (pip)
+        - npm
+        - Both
+        - N/A
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python version, and how you installed aigate.
+      placeholder: |
+        - OS: macOS 15.3 / Ubuntu 24.04 / Windows 11
+        - Python: 3.12.2
+        - Install method: uv pip install aigate
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Exact commands or steps to reproduce the issue.
+      placeholder: |
+        1. Run `aigate check some-package -e pypi --skip-ai`
+        2. Observe error...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened? Include full error output if applicable.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / terminal output
+      description: Paste any relevant logs (use `-v` for verbose output).
+      render: shell
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Anything else that might help (config file, screenshots, etc.).

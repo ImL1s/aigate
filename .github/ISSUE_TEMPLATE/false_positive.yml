@@ -1,0 +1,93 @@
+name: False Positive Report
+description: Report a package incorrectly flagged as suspicious or malicious
+title: "[False Positive]: "
+labels: ["false-positive"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        False positive reports are critical for improving aigate's detection accuracy. Thank you for taking the time to report this!
+
+  - type: input
+    id: package
+    attributes:
+      label: Package name
+      description: The full package name that was incorrectly flagged.
+      placeholder: "e.g., my-legit-package"
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      description: The specific version that was flagged.
+      placeholder: "e.g., 1.2.3"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: ecosystem
+    attributes:
+      label: Ecosystem
+      description: Which package registry?
+      options:
+        - PyPI
+        - npm
+    validations:
+      required: true
+
+  - type: input
+    id: aigate-version
+    attributes:
+      label: aigate version
+      description: Output of `aigate --version`
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: aigate output
+      description: Full output from aigate (use `--json` for structured output).
+      render: json
+    validations:
+      required: true
+
+  - type: dropdown
+    id: decision
+    attributes:
+      label: Decision reported
+      description: What decision did aigate give?
+      options:
+        - malicious (exit code 2)
+        - suspicious / needs_review (exit code 1)
+    validations:
+      required: true
+
+  - type: textarea
+    id: flags
+    attributes:
+      label: Which flags triggered?
+      description: List the specific pre-filter or AI flags that fired (visible in verbose or JSON output).
+      placeholder: |
+        - dangerous_pattern(HIGH): setup.py exec
+        - typosquat: edit distance 1 from "requests"
+
+  - type: textarea
+    id: why-false
+    attributes:
+      label: Why is this a false positive?
+      description: Explain why the package is legitimate. Link to the repo, docs, or other evidence.
+      placeholder: |
+        This package is the official SDK maintained by [org]. The flagged pattern
+        in setup.py is standard for building C extensions. See: https://github.com/...
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Config overrides, enrichment data, or anything else relevant.
