@@ -11,6 +11,7 @@ from .backends.claude import ClaudeBackend
 from .backends.codex import CodexBackend
 from .backends.gemini import GeminiBackend
 from .backends.ollama import OllamaBackend
+from .backends.openai_compat import OpenAICompatBackend
 from .config import Config, ModelConfig
 from .models import (
     AnalysisLevel,
@@ -28,6 +29,7 @@ BACKEND_MAP = {
     "codex": CodexBackend,
     "gemini": GeminiBackend,
     "ollama": OllamaBackend,
+    "openai_compat": OpenAICompatBackend,
 }
 
 
