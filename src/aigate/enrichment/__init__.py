@@ -19,104 +19,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..models import PackageInfo
+from ..models import (
+    EnrichmentResult,
+    KnownVulnerability,
+    PackageInfo,
+    ProvenanceInfo,
+    ScorecardCheck,
+    ScorecardResult,
+    SecurityMention,
+)
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Data models
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class SecurityMention:
-    """A security-related mention found via web search."""
-
-    title: str
-    url: str
-    snippet: str
-    source: str = ""  # "google", "bing", "reddit", etc.
-    relevance: float = 0.0
-
-
-@dataclass
-class KnownVuln:
-    """A known vulnerability from OSV.dev or similar databases."""
-
-    id: str  # "GHSA-xxx" or "CVE-xxx"
-    summary: str
-    severity: str = "UNKNOWN"  # LOW, MEDIUM, HIGH, CRITICAL
-    fixed_version: str = ""
-
-
-@dataclass
-class EnrichmentResult:
-    """Aggregated intelligence from all enrichment sources."""
-
-    # Context7 — official documentation context
-    library_description: str = ""
-    expected_capabilities: list[str] = field(default_factory=list)
-    doc_snippets: list[str] = field(default_factory=list)
-
-    # Web search — security intelligence
-    security_mentions: list[SecurityMention] = field(default_factory=list)
-    author_info: str = ""
-
-    # OSV — known vulnerabilities
-    known_vulnerabilities: list[KnownVuln] = field(default_factory=list)
-
-    # Meta
-    sources_queried: list[str] = field(default_factory=list)
-    cache_hit: bool = False
-    enrichment_latency_ms: int = 0
-    errors: list[str] = field(default_factory=list)
-
-    def to_prompt_section(self) -> str:
-        """Format enrichment data as a prompt section for AI analysis."""
-        if not self.sources_queried:
-            return ""
-
-        sections: list[str] = []
-        sections.append("## External Intelligence (enrichment)")
-
-        # Context7 docs
-        if self.library_description or self.doc_snippets:
-            sections.append("\n### Official Documentation Context (via Context7)")
-            if self.library_description:
-                sections.append(f'This package is described as: "{self.library_description}"')
-            if self.expected_capabilities:
-                sections.append("Expected capabilities: " + ", ".join(self.expected_capabilities))
-            for snippet in self.doc_snippets[:3]:  # Limit to 3 snippets
-                sections.append(f"- {snippet[:500]}")
-
-        # Web search security intel
-        if self.security_mentions:
-            sections.append("\n### Security Intelligence (web search) [unverified]")
-            for mention in self.security_mentions[:5]:  # Top 5
-                sections.append(f'- [{mention.source}] "{mention.title}"')
-                if mention.snippet:
-                    sections.append(f"  {mention.snippet[:200]}")
-        elif "web_search" in self.sources_queried:
-            sections.append("\n### Security Intelligence (web search)")
-            sections.append("- No recent security reports found for this package.")
-
-        # Known vulns
-        if self.known_vulnerabilities:
-            sections.append("\n### Known Vulnerabilities (OSV.dev)")
-            for vuln in self.known_vulnerabilities:
-                line = f'- {vuln.id}: "{vuln.summary}" (severity: {vuln.severity})'
-                if vuln.fixed_version:
-                    line += f" — fixed in {vuln.fixed_version}"
-                sections.append(line)
-        elif "osv" in self.sources_queried:
-            sections.append("\n### Known Vulnerabilities (OSV.dev)")
-            sections.append("- No known vulnerabilities for this version.")
-
-        if self.author_info:
-            sections.append(f"\n### Author Info\n{self.author_info[:300]}")
-
-        return "\n".join(sections)
 
 
 # ---------------------------------------------------------------------------
@@ -144,17 +57,40 @@ class OsvConfig:
 
 
 @dataclass
+class DepsDevConfig:
+    enabled: bool = False
+    api_base_url: str = "https://api.deps.dev/v3"
+
+
+@dataclass
+class ScorecardConfig:
+    enabled: bool = False
+    api_base_url: str = "https://api.securityscorecards.dev"
+
+
+@dataclass
+class ProvenanceConfig:
+    enabled: bool = False
+
+
+@dataclass
 class EnrichmentConfig:
     enabled: bool = False
     context7: Context7Config = field(default_factory=Context7Config)
     web_search: WebSearchConfig = field(default_factory=WebSearchConfig)
     osv: OsvConfig = field(default_factory=OsvConfig)
+    deps_dev: DepsDevConfig = field(default_factory=DepsDevConfig)
+    scorecard: ScorecardConfig = field(default_factory=ScorecardConfig)
+    provenance: ProvenanceConfig = field(default_factory=ProvenanceConfig)
     timeout_seconds: int = 10
     cache_ttl_hours: dict[str, int] = field(
         default_factory=lambda: {
             "context7": 168,  # 7 days
             "web_search": 24,  # 1 day
             "osv": 6,  # 6 hours
+            "deps_dev": 24,
+            "scorecard": 24,
+            "provenance": 24,
         }
     )
 
@@ -217,6 +153,9 @@ async def run_enrichment(
         return EnrichmentResult()
 
     from .context7 import fetch_context7_docs
+    from .deps_dev import fetch_deps_dev_metadata
+    from .provenance import fetch_provenance
+    from .scorecard import fetch_scorecard
     from .threat_intel import query_osv_vulns
     from .web_search import search_security_intel
 
@@ -229,8 +168,10 @@ async def run_enrichment(
         tasks.append(("web_search", search_security_intel(package, config.web_search)))
     if config.osv.enabled:
         tasks.append(("osv", query_osv_vulns(package)))
+    if config.deps_dev.enabled:
+        tasks.append(("deps_dev", fetch_deps_dev_metadata(package, config.deps_dev)))
 
-    if not tasks:
+    if not tasks and not config.scorecard.enabled and not config.provenance.enabled:
         return EnrichmentResult()
 
     sources = [name for name, _ in tasks]
@@ -245,11 +186,45 @@ async def run_enrichment(
         logger.warning("Enrichment timed out after %ds", config.timeout_seconds)
         raw_results = [TimeoutError("enrichment timeout")] * len(coros)
 
-    return _merge_results(
+    result = _merge_results(
         sources=sources,
         raw_results=list(raw_results),
         latency_ms=int((time.monotonic() - start) * 1000),
     )
+
+    if config.scorecard.enabled:
+        repo_url = result.repository_url or package.repository
+        result.sources_queried.append("scorecard")
+        if repo_url:
+            try:
+                scorecard_raw = await fetch_scorecard(repo_url, config.scorecard)
+                result.scorecard = _build_scorecard_result(scorecard_raw)
+            except Exception as e:
+                result.errors.append(f"scorecard: {e}")
+                logger.warning("Enrichment source scorecard failed: %s", e)
+
+    if config.provenance.enabled:
+        result.sources_queried.append("provenance")
+        try:
+            provenance_raw = await fetch_provenance(
+                package,
+                deps_dev_metadata={
+                    "repository_url": result.repository_url,
+                    "attestation_count": (
+                        result.provenance.attestation_count if result.provenance else 0
+                    ),
+                    "slsa_provenance_count": (
+                        result.provenance.slsa_provenance_count if result.provenance else 0
+                    ),
+                },
+            )
+            result.provenance = ProvenanceInfo(**provenance_raw)
+        except Exception as e:
+            result.errors.append(f"provenance: {e}")
+            logger.warning("Enrichment source provenance failed: %s", e)
+
+    result.enrichment_latency_ms = int((time.monotonic() - start) * 1000)
+    return result
 
 
 def _merge_results(
@@ -282,6 +257,33 @@ def _merge_results(
             result.author_info = raw.get("author_info", "")
         elif source == "osv":
             for v in raw.get("known_vulnerabilities", []):
-                result.known_vulnerabilities.append(KnownVuln(**v))
+                result.known_vulnerabilities.append(KnownVulnerability(**v))
+        elif source == "deps_dev":
+            result.repository_url = raw.get("repository_url", "")
+            result.project_status = raw.get("project_status", "")
+            result.advisory_ids = raw.get("advisory_ids", [])
+            if raw.get("provenance"):
+                result.provenance = ProvenanceInfo(**raw["provenance"])
 
     return result
+
+
+def _build_scorecard_result(raw: dict[str, Any]) -> ScorecardResult:
+    checks = []
+    for check in raw.get("checks", []):
+        documentation = check.get("documentation", {}) or {}
+        checks.append(
+            ScorecardCheck(
+                name=check.get("name", ""),
+                score=float(check.get("score", 0)),
+                reason=check.get("reason", ""),
+                documentation_url=documentation.get("url", ""),
+            )
+        )
+    return ScorecardResult(
+        repository_url=raw.get("repository_url", ""),
+        date=raw.get("date", ""),
+        score=float(raw.get("score", 0.0)),
+        critical_findings=raw.get("critical_findings", []),
+        checks=checks,
+    )

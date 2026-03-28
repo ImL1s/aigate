@@ -11,7 +11,8 @@ from rich.console import Console
 
 from ..config import Config
 from ..consensus import run_consensus
-from ..models import AnalysisLevel, AnalysisReport, Verdict
+from ..models import AnalysisLevel, AnalysisReport
+from ..policy import PolicyOutcome, decision_from_report
 from ..prefilter import run_prefilter
 from ..reporters.terminal import TerminalReporter
 from ..resolver import download_source, resolve_package
@@ -22,6 +23,10 @@ console = Console()
 def pip_wrapper():
     """Entry point for `aigate-pip` wrapper command."""
     args = sys.argv[1:]
+
+    if "--no-aigate" in args:
+        _passthrough_pip([arg for arg in args if arg != "--no-aigate"])
+        return
 
     # Only intercept `install` commands
     if not args or args[0] != "install":
@@ -54,36 +59,38 @@ def pip_wrapper():
 async def _check_packages(packages: list[tuple[str, str | None]]) -> list[str]:
     """Check all packages, return list of blocked package names."""
     config = Config.load()
-    blocked = []
+    blocked: list[str] = []
 
     for name, version in packages:
         try:
             package = await resolve_package(name, version, "pypi")
             source_files = await download_source(package)
             prefilter = run_prefilter(package, config, source_files)
-
-            if not prefilter.passed and not prefilter.needs_ai_review:
-                blocked.append(name)
-                continue
-
+            consensus = None
             if prefilter.needs_ai_review:
                 source_text = "\n".join(f"### {p}\n```\n{c}\n```" for p, c in source_files.items())
-                result = await run_consensus(
+                consensus = await run_consensus(
                     package=package,
                     risk_signals=prefilter.risk_signals,
                     source_code=source_text,
                     config=config,
                     level=AnalysisLevel.L1_QUICK,
                 )
-                if result.final_verdict == Verdict.MALICIOUS:
-                    blocked.append(name)
-                    TerminalReporter(console).print_report(
-                        AnalysisReport(
-                            package=package,
-                            prefilter=prefilter,
-                            consensus=result,
-                        )
-                    )
+
+            report = AnalysisReport(
+                package=package,
+                prefilter=prefilter,
+                consensus=consensus,
+            )
+            decision = decision_from_report(report)
+            if decision.should_block_install:
+                blocked.append(name)
+                TerminalReporter(console).print_report(report)
+            elif decision.outcome == PolicyOutcome.ERROR:
+                console.print(
+                    f"[yellow]Warning: AI analysis returned an error for {name}: "
+                    f"{decision.reason}[/yellow]"
+                )
         except Exception as e:
             console.print(f"[yellow]Warning: Could not check {name}: {e}[/yellow]")
 

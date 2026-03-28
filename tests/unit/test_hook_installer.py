@@ -168,11 +168,11 @@ class TestInstallAider:
         install_aider(tmp_path)
         content = (tmp_path / ".aider.conf.yml").read_text()
         assert "auto-lint: true" in content
-        assert "aigate scan-modified" in content
+        assert "aigate scan requirements.txt --skip-ai" in content
 
     def test_skips_if_already_configured(self, tmp_path):
         conf = tmp_path / ".aider.conf.yml"
-        conf.write_text('lint-cmd: "aigate scan-modified"\n')
+        conf.write_text('lint-cmd: "aigate scan requirements.txt --skip-ai"\n')
         msgs = install_aider(tmp_path)
         assert any("skip" in m for m in msgs)
 
@@ -181,7 +181,7 @@ class TestInstallAider:
         conf.write_text('lint-cmd: "pylint"\nauto-test: false\n')
         install_aider(tmp_path)
         content = conf.read_text()
-        assert "aigate scan-modified && pylint" in content
+        assert "aigate scan requirements.txt --skip-ai && pylint" in content
         assert "auto-test: false" in content
 
 

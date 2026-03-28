@@ -15,6 +15,7 @@ from .cache import get_cached, set_cached
 from .config import Config
 from .consensus import run_consensus
 from .models import AnalysisLevel, AnalysisReport, PackageInfo, PrefilterResult, RiskLevel, Verdict
+from .policy import PolicyOutcome, aggregate_decisions, decision_from_error, decision_from_report
 from .prefilter import run_prefilter
 from .reporters.json_reporter import JsonReporter
 from .reporters.terminal import TerminalReporter
@@ -121,14 +122,13 @@ async def _check(
     prefilter_result = run_prefilter(package, config, source_files)
 
     # 3.5 Enrichment (optional — adds context to AI prompt)
-    enrichment_section = ""
+    enrichment_result = None
     if config.enrichment.enabled and not skip_ai and prefilter_result.needs_ai_review:
         from .enrichment import run_enrichment
 
         with console.status("Gathering external intelligence..."):
             try:
-                enrichment = await run_enrichment(package, config.enrichment)
-                enrichment_section = enrichment.to_prompt_section()
+                enrichment_result = await run_enrichment(package, config.enrichment)
             except Exception as e:
                 console.print(f"[dim]Enrichment failed: {e}[/dim]")
 
@@ -136,8 +136,6 @@ async def _check(
     consensus_result = None
     if not skip_ai and prefilter_result.needs_ai_review:
         source_text = _format_source_for_ai(source_files)
-        if enrichment_section:
-            source_text = enrichment_section + "\n\n" + source_text
         with console.status("Running AI analysis..."):
             try:
                 consensus_result = await run_consensus(
@@ -146,6 +144,9 @@ async def _check(
                     source_code=source_text,
                     config=config,
                     level=level,
+                    external_intelligence=(
+                        enrichment_result.to_prompt_section() if enrichment_result else ""
+                    ),
                 )
             except Exception as e:
                 console.print(f"[yellow]AI analysis failed: {e}[/yellow]")
@@ -160,6 +161,7 @@ async def _check(
         package=package,
         prefilter=prefilter_result,
         consensus=consensus_result,
+        enrichment=enrichment_result,
         total_latency_ms=total_ms,
     )
 
@@ -242,14 +244,16 @@ async def _scan(
         if not use_json:
             _print_scan_result(result)
 
-    summary = _scan_summary(results)
-    exit_code = _aggregate_scan_exit_code(results)
+    decisions = [result["decision"] for result in results]
+    summary = _scan_summary(decisions)
+    aggregate = aggregate_decisions(decisions)
     payload = {
         "lockfile": lockfile,
         "ecosystem": ecosystem,
         "packages": [_scan_result_payload(result) for result in results],
         "summary": summary,
-        "exit_code": exit_code,
+        "decision": aggregate.outcome,
+        "exit_code": aggregate.exit_code,
     }
 
     if use_json:
@@ -260,8 +264,8 @@ async def _scan(
             f"{summary['suspicious'] + summary['malicious']} flagged for review."
         )
 
-    if exit_code != 0:
-        sys.exit(exit_code)
+    if aggregate.exit_code != 0:
+        sys.exit(aggregate.exit_code)
 
 
 @main.command()
@@ -319,10 +323,9 @@ async def _diff(
     # Compute diff: files only in new or changed
     added_files: dict[str, str] = {}
     changed_files: dict[str, str] = {}
+    old_norm = {_strip_version_prefix(k): v for k, v in old_files.items()}
     for path, content in new_files.items():
-        # Normalize paths (strip version prefix)
         norm = _strip_version_prefix(path)
-        old_norm = {_strip_version_prefix(k): v for k, v in old_files.items()}
         if norm not in old_norm:
             added_files[path] = content
         elif old_norm[norm] != content:
@@ -429,7 +432,7 @@ def init():
 
     default_config = """\
 # aigate configuration
-# Docs: https://github.com/anthropics/aigate
+# Docs: https://github.com/ImL1s/aigate
 
 models:
   - name: claude
@@ -479,6 +482,22 @@ cache_dir: ~/.aigate/cache
 cache_ttl_hours: 168  # 7 days
 max_analysis_level: l2_deep
 output_format: rich  # rich | json | sarif
+
+enrichment:
+  enabled: false
+  timeout_seconds: 10
+  osv:
+    enabled: true
+  deps_dev:
+    enabled: false
+  scorecard:
+    enabled: false
+  provenance:
+    enabled: false
+  context7:
+    enabled: false
+  web_search:
+    enabled: false
 """
     config_path.write_text(default_config)
     console.print(f"[green]Created {config_path}[/green]")
@@ -614,85 +633,69 @@ async def _scan_dependency(
         )
         return {
             "report": report,
-            "exit_code": 3,
+            "decision": decision_from_error(str(e)),
             "error": str(e),
         }
 
     prefilter = run_prefilter(package, config, source_files)
     consensus = None
+    enrichment_result = None
     error = ""
 
     if not skip_ai and prefilter.needs_ai_review:
+        if config.enrichment.enabled:
+            try:
+                from .enrichment import run_enrichment
+
+                enrichment_result = await run_enrichment(package, config.enrichment)
+            except Exception as e:
+                error = f"Enrichment failed: {e}"
+
         source_text = _format_source_for_ai(source_files)
-        try:
-            consensus = await run_consensus(
-                package=package,
-                risk_signals=prefilter.risk_signals,
-                source_code=source_text,
-                config=config,
-                level=AnalysisLevel.L1_QUICK,
-            )
-        except Exception as e:
-            error = f"AI analysis failed: {e}"
+        if not error:
+            try:
+                consensus = await run_consensus(
+                    package=package,
+                    risk_signals=prefilter.risk_signals,
+                    source_code=source_text,
+                    config=config,
+                    level=AnalysisLevel.L1_QUICK,
+                    external_intelligence=(
+                        enrichment_result.to_prompt_section() if enrichment_result else ""
+                    ),
+                )
+            except Exception as e:
+                error = f"AI analysis failed: {e}"
 
     report = AnalysisReport(
         package=package,
         prefilter=prefilter,
         consensus=consensus,
+        enrichment=enrichment_result,
         total_latency_ms=int((time.monotonic() - start) * 1000),
     )
-    exit_code = 3 if error else _scan_report_exit_code(report)
+    decision = decision_from_error(error) if error else decision_from_report(report)
     return {
         "report": report,
-        "exit_code": exit_code,
+        "decision": decision,
         "error": error,
     }
 
 
-def _scan_report_exit_code(report: AnalysisReport) -> int:
-    if report.consensus:
-        exit_codes = {
-            Verdict.SAFE: 0,
-            Verdict.SUSPICIOUS: 1,
-            Verdict.NEEDS_HUMAN_REVIEW: 1,
-            Verdict.MALICIOUS: 2,
-            Verdict.ERROR: 3,
-        }
-        return exit_codes.get(report.consensus.final_verdict, 3)
-
-    if report.prefilter.risk_level in (RiskLevel.HIGH, RiskLevel.CRITICAL):
-        return 2
-    if report.prefilter.risk_level == RiskLevel.MEDIUM:
-        return 1
-    return 0
-
-
-def _aggregate_scan_exit_code(results: list[dict]) -> int:
-    exit_codes = [result["exit_code"] for result in results]
-    if any(code == 3 for code in exit_codes):
-        return 3
-    if any(code == 2 for code in exit_codes):
-        return 2
-    if any(code == 1 for code in exit_codes):
-        return 1
-    return 0
-
-
-def _scan_summary(results: list[dict]) -> dict[str, int]:
+def _scan_summary(decisions: list) -> dict[str, int]:
     summary = {
-        "total": len(results),
+        "total": len(decisions),
         "safe": 0,
         "suspicious": 0,
         "malicious": 0,
         "errors": 0,
     }
-    for result in results:
-        code = result["exit_code"]
-        if code == 3:
+    for decision in decisions:
+        if decision.outcome == PolicyOutcome.ERROR:
             summary["errors"] += 1
-        elif code == 2:
+        elif decision.outcome == PolicyOutcome.MALICIOUS:
             summary["malicious"] += 1
-        elif code == 1:
+        elif decision.outcome == PolicyOutcome.NEEDS_REVIEW:
             summary["suspicious"] += 1
         else:
             summary["safe"] += 1
@@ -701,22 +704,23 @@ def _scan_summary(results: list[dict]) -> dict[str, int]:
 
 def _scan_result_payload(result: dict) -> dict:
     payload = asdict(result["report"])
-    payload["exit_code"] = result["exit_code"]
+    payload["decision"] = result["decision"].outcome
+    payload["exit_code"] = result["decision"].exit_code
     payload["error"] = result["error"]
     return payload
 
 
 def _print_scan_result(result: dict) -> None:
     report: AnalysisReport = result["report"]
-    code = result["exit_code"]
+    decision = result["decision"]
     package = report.package
-    if code == 3:
+    if decision.outcome == PolicyOutcome.ERROR:
         console.print(f"  [red]ERROR[/red] {package.name}=={package.version}: {result['error']}")
         return
 
-    if code == 2:
+    if decision.outcome == PolicyOutcome.MALICIOUS:
         status = "[red]MALICIOUS[/red]"
-    elif code == 1:
+    elif decision.outcome == PolicyOutcome.NEEDS_REVIEW:
         status = "[yellow]REVIEW[/yellow]"
     else:
         status = "[green]OK[/green]"

@@ -44,6 +44,7 @@ async def run_consensus(
     config: Config,
     level: AnalysisLevel = AnalysisLevel.L1_QUICK,
     version_diff: VersionDiff | None = None,
+    external_intelligence: str = "",
 ) -> ConsensusResult:
     """Run multi-model analysis and aggregate votes."""
     enabled_models = [m for m in config.models if m.enabled]
@@ -98,6 +99,7 @@ async def run_consensus(
                 has_install_scripts=package.has_install_scripts,
                 risk_signals=risk_signals,
                 source_code=source_code,
+                external_intelligence=external_intelligence,
                 level=level,
             )
         tasks.append(task)

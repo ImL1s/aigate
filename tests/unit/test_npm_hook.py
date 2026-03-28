@@ -1,5 +1,8 @@
 """Tests for the npm install hook — package spec parsing and command routing."""
 
+import pytest
+
+from aigate.hooks import npm_hook
 from aigate.hooks.npm_hook import (
     _extract_packages,
     _install_commands_for,
@@ -139,3 +142,27 @@ class TestInstallCommands:
         assert "add" in cmds
         assert "install" in cmds
         assert "i" in cmds
+
+
+def test_npm_wrapper_bypasses_with_no_aigate(monkeypatch):
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        npm_hook.sys,
+        "argv",
+        ["aigate-npm", "npm", "install", "--no-aigate", "react"],
+    )
+    monkeypatch.setattr(
+        npm_hook,
+        "_passthrough",
+        lambda pm, args: seen.update({"pm": pm, "args": args}),
+    )
+    monkeypatch.setattr(
+        npm_hook.asyncio,
+        "run",
+        lambda _: pytest.fail("npm_wrapper should bypass without invoking aigate"),
+    )
+
+    npm_hook.npm_wrapper()
+
+    assert seen == {"pm": "npm", "args": ["install", "react"]}

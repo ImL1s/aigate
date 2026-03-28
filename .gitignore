@@ -10,3 +10,10 @@ build/
 *.egg
 .aigate.yml
 CLAUDE.local.md
+.env
+*.pem
+*.key
+.coverage
+coverage.xml
+htmlcov/
+.mypy_cache/

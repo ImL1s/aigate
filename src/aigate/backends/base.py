@@ -23,6 +23,9 @@ for potential malicious behavior.
 ## Risk Signals from Static Analysis
 {risk_signals}
 
+## External Intelligence
+{external_intelligence}
+
 ## Source Code to Analyze
 
 <UNTRUSTED_PACKAGE_CODE>
@@ -121,6 +124,7 @@ class AIBackend(ABC):
         has_install_scripts: bool,
         risk_signals: list[str],
         source_code: str,
+        external_intelligence: str = "",
         level: AnalysisLevel = AnalysisLevel.L1_QUICK,
     ) -> ModelResult:
         """Analyze a package and return structured result."""
@@ -132,6 +136,7 @@ class AIBackend(ABC):
             description=description or "none",
             has_install_scripts=has_install_scripts,
             risk_signals="\n".join(f"- {s}" for s in risk_signals) or "None",
+            external_intelligence=external_intelligence or "None",
             source_code=_truncate(source_code, level),
         )
 

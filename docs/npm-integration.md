@@ -30,6 +30,8 @@ It will:
 5. **Block** the install if a package is deemed malicious (exit code 2)
 6. **Proceed** with the real `npm install` if all packages pass
 
+For bare reinstall commands such as `npm install` with no explicit package names, `aigate-npm` currently passes through to the real package manager. Use `aigate scan package-lock.json --ecosystem npm --json` in CI, or the AI-tool pre-execution hook, when you want lockfile gating.
+
 ## Supported Package Managers
 
 | Manager | Install commands intercepted |
@@ -47,27 +49,15 @@ aigate-npm pnpm add -D typescript
 
 By default, `aigate-npm` delegates to `npm`. If `yarn` or `pnpm` is detected as the first argument, it delegates to that instead.
 
-## Integration with package.json
+## Bypass
 
-Add a `preinstall` script to your project so every `npm install` is gated automatically:
+Use `--no-aigate` to pass through to the real package manager without inspection:
 
-```json
-{
-  "scripts": {
-    "preinstall": "npx aigate-npm check-lockfile || true"
-  }
-}
+```bash
+aigate-npm install --no-aigate react
 ```
 
-Or, for a stricter approach that blocks installs entirely:
-
-```json
-{
-  "scripts": {
-    "preinstall": "command -v aigate-npm >/dev/null 2>&1 && echo 'Use aigate-npm instead of npm install directly' && exit 1 || true"
-  }
-}
-```
+The wrapper strips `--no-aigate` before delegating to the real tool.
 
 ## Integration with .npmrc
 
@@ -103,8 +93,8 @@ In a CI pipeline, install aigate and use it as the install command:
 # GitHub Actions example
 - name: Install dependencies (with security gate)
   run: |
-    pip install aigate
-    aigate-npm install
+    uv pip install aigate
+    aigate scan package-lock.json --ecosystem npm --json --skip-ai
 ```
 
 ## Configuration
@@ -131,9 +121,10 @@ See the main [README](../README.md) for full configuration options.
 
 | Code | Meaning |
 |------|---------|
-| 0    | All packages safe, install proceeded |
-| 1    | Suspicious packages (warning only) |
+| 0    | Safe |
+| 1    | Needs review |
 | 2    | Malicious package blocked, install aborted |
+| 3    | Error while analyzing |
 
 ## How It Differs from `--ignore-scripts`
 

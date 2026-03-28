@@ -18,7 +18,7 @@ HOOK_SCRIPT = PROJECT_ROOT / "scripts" / "pretool-hook.sh"
 
 DEFAULT_SAFE_AIGATE = (
     "#!/usr/bin/env zsh\n"
-    """echo '{"prefilter":{"risk_level":"none","reason":"safe"}}'\n"""
+    """echo '{"decision":"safe","exit_code":0,"reason":"safe"}'\n"""
 )
 
 
@@ -32,6 +32,7 @@ def _run_hook(
     *,
     fake_aigate: str | None = None,
     timeout: int = 10,
+    cwd: Path | None = None,
 ) -> subprocess.CompletedProcess:
     """Run pretool-hook.sh with a given command string.
 
@@ -62,6 +63,7 @@ def _run_hook(
             text=True,
             timeout=timeout,
             env=env,
+            cwd=cwd or PROJECT_ROOT,
         )
     finally:
         try:
@@ -79,6 +81,14 @@ def _run_hook(
 class TestSkipCases:
     """Commands that the hook should ignore (allow silently)."""
 
+    SCAN_BLOCKING_AIGATE = textwrap.dedent("""\
+        if [[ "$1" == "scan" ]]; then
+          echo '{"decision":"malicious","exit_code":2,"reason":"lockfile blocked"}'
+        else
+          echo '{"decision":"safe","exit_code":0,"reason":"safe"}'
+        fi
+    """)
+
     def test_non_install_command(self):
         """Regular shell commands should pass through."""
         r = _run_hook("ls -la")
@@ -86,10 +96,14 @@ class TestSkipCases:
         assert r.stdout.strip() == ""
 
     def test_pip_install_requirements(self):
-        """pip install -r requirements.txt should be skipped."""
-        r = _run_hook("pip install -r requirements.txt")
-        assert r.returncode == 0
-        assert r.stdout.strip() == ""
+        """pip install -r requirements.txt should scan the requirements file."""
+        r = _run_hook(
+            "pip install -r requirements.txt",
+            fake_aigate=self.SCAN_BLOCKING_AIGATE,
+        )
+        output = json.loads(r.stdout.strip())
+        assert output["decision"] == "block"
+        assert "requirements.txt" in output["reason"]
 
     def test_pip_install_dot(self):
         """pip install . (local install) should be skipped."""
@@ -116,8 +130,24 @@ class TestSkipCases:
         assert r.stdout.strip() == ""
 
     def test_bare_npm_install(self):
-        """Bare `npm install` (no package name) should be skipped."""
-        r = _run_hook("npm install")
+        """Bare `npm install` should scan the local lockfile when present."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / "package-lock.json").write_text('{"lockfileVersion": 3, "packages": {}}')
+            r = _run_hook(
+                "npm install",
+                fake_aigate=self.SCAN_BLOCKING_AIGATE,
+                cwd=tmp_path,
+            )
+        output = json.loads(r.stdout.strip())
+        assert output["decision"] == "block"
+        assert "package-lock.json" in output["reason"]
+
+    def test_no_aigate_flag_bypasses_scan(self):
+        r = _run_hook(
+            "pip install --no-aigate requests",
+            fake_aigate=self.SCAN_BLOCKING_AIGATE,
+        )
         assert r.returncode == 0
         assert r.stdout.strip() == ""
 
@@ -209,11 +239,11 @@ class TestBlockedPackages:
     """When aigate flags a package as critical/high, the hook should block."""
 
     CRITICAL_AIGATE = textwrap.dedent("""\
-        echo '{"prefilter":{"risk_level":"critical","reason":"blocklisted package"}}'
+        echo '{"decision":"malicious","exit_code":2,"reason":"blocklisted package"}'
     """)
 
     HIGH_AIGATE = textwrap.dedent("""\
-        echo '{"prefilter":{"risk_level":"high","reason":"typosquat of requests"}}'
+        echo '{"decision":"malicious","exit_code":2,"reason":"typosquat of requests"}'
     """)
 
     def test_pip_install_blocked_critical(self):
@@ -263,11 +293,11 @@ class TestAllowedRiskLevels:
     """Medium and low risk should pass through (not block)."""
 
     MEDIUM_AIGATE = textwrap.dedent("""\
-        echo '{"prefilter":{"risk_level":"medium","reason":"some signals"}}'
+        echo '{"decision":"needs_review","exit_code":1,"reason":"some signals"}'
     """)
 
     LOW_AIGATE = textwrap.dedent("""\
-        echo '{"prefilter":{"risk_level":"low","reason":"minor signals"}}'
+        echo '{"decision":"safe","exit_code":0,"reason":"minor signals"}'
     """)
 
     def test_medium_risk_allowed(self):
@@ -304,9 +334,9 @@ class TestSelectiveBlocking:
           fi
         done
         if [[ "$pkg" == *evil* ]]; then
-          echo '{"prefilter":{"risk_level":"critical","reason":"known malicious"}}'
+          echo '{"decision":"malicious","exit_code":2,"reason":"known malicious"}'
         else
-          echo '{"prefilter":{"risk_level":"none","reason":"safe"}}'
+          echo '{"decision":"safe","exit_code":0,"reason":"safe"}'
         fi
     """)
 

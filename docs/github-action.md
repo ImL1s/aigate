@@ -29,8 +29,8 @@ jobs:
 
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
-| `lockfile` | Yes | — | Path to lockfile (`requirements.txt`, `package-lock.json`, `pubspec.lock`) |
-| `ecosystem` | No | `pypi` | Package ecosystem (`pypi`, `npm`) |
+| `lockfile` | Yes | — | Path to lockfile (`requirements.txt`, `uv.lock`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`) |
+| `ecosystem` | No | inferred from lockfile | Optional ecosystem override (`pypi`, `npm`) |
 | `fail-on` | No | `malicious` | When to fail: `malicious`, `suspicious`, or `any` |
 | `skip-ai` | No | `true` | Skip AI models, run static pre-filter only (recommended for CI) |
 | `python-version` | No | `3.12` | Python version for the runner |
@@ -40,7 +40,7 @@ jobs:
 | Output | Description |
 |--------|-------------|
 | `exit-code` | aigate exit code: `0`=safe, `1`=suspicious, `2`=malicious, `3`=error |
-| `report` | JSON scan report |
+| `report` | JSON scan report including top-level `decision`, `summary`, and per-package results |
 
 ## Examples
 
@@ -61,7 +61,6 @@ Fast static analysis without AI — catches typosquatting, suspicious patterns, 
 - uses: ImL1s/aigate@main
   with:
     lockfile: package-lock.json
-    ecosystem: npm
     fail-on: suspicious
 ```
 
@@ -111,15 +110,15 @@ jobs:
           fail-on: malicious
 ```
 
-When `fail-on: malicious` is set, the workflow will only fail (and block merge) if a package is flagged as malicious. Suspicious packages will be reported but won't block the PR.
+When `fail-on: malicious` is set, the workflow only fails on normalized `malicious` findings. `needs_review` results are still surfaced in the JSON report and step summary.
 
 ## How `fail-on` works
 
-| `fail-on` value | Fails on exit 1 (suspicious) | Fails on exit 2 (malicious) |
-|-----------------|------------------------------|------------------------------|
-| `malicious` | No | Yes |
-| `suspicious` | Yes | Yes |
-| `any` | Yes | Yes |
+| `fail-on` value | Fails on exit 1 (needs review) | Fails on exit 2 (malicious) | Fails on exit 3 (error) |
+|-----------------|---------------------------------|------------------------------|---------------------------|
+| `malicious` | No | Yes | Yes |
+| `suspicious` | Yes | Yes | Yes |
+| `any` | Yes | Yes | Yes |
 
 ## Exit Codes
 
@@ -134,5 +133,6 @@ When `fail-on: malicious` is set, the workflow will only fail (and block merge) 
 
 - **CI default is `skip-ai: true`** — static pre-filter is fast (~1s) and catches known attack patterns without API keys
 - Use `fail-on: malicious` for production gates, `fail-on: suspicious` for stricter security
+- The action installs the checked-out action code via `${{ github.action_path }}` so the CLI and composite action stay on the same revision
 - The action writes a summary to `$GITHUB_STEP_SUMMARY` visible in the Actions tab
 - Pin to a release tag (e.g., `ImL1s/aigate@v0.1.0`) once available for reproducible builds

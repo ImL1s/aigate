@@ -8,7 +8,15 @@ from typing import Any
 
 import yaml
 
-from .enrichment import Context7Config, EnrichmentConfig, OsvConfig, WebSearchConfig
+from .enrichment import (
+    Context7Config,
+    DepsDevConfig,
+    EnrichmentConfig,
+    OsvConfig,
+    ProvenanceConfig,
+    ScorecardConfig,
+    WebSearchConfig,
+)
 
 DEFAULT_CONFIG_NAME = ".aigate.yml"
 
@@ -140,9 +148,24 @@ def _parse_enrichment(raw: dict | None) -> EnrichmentConfig:
             enabled=raw.get("web_search", {}).get("enabled", False),
             provider=raw.get("web_search", {}).get("provider", "brightdata"),
             api_key_env=raw.get("web_search", {}).get("api_key_env", "BRIGHT_DATA_API_KEY"),
+            zone=raw.get("web_search", {}).get("zone", ""),
         ),
         osv=OsvConfig(
             enabled=raw.get("osv", {}).get("enabled", True),
+        ),
+        deps_dev=DepsDevConfig(
+            enabled=raw.get("deps_dev", {}).get("enabled", False),
+            api_base_url=raw.get("deps_dev", {}).get("api_base_url", "https://api.deps.dev/v3"),
+        ),
+        scorecard=ScorecardConfig(
+            enabled=raw.get("scorecard", {}).get("enabled", False),
+            api_base_url=raw.get("scorecard", {}).get(
+                "api_base_url",
+                "https://api.securityscorecards.dev",
+            ),
+        ),
+        provenance=ProvenanceConfig(
+            enabled=raw.get("provenance", {}).get("enabled", False),
         ),
         timeout_seconds=raw.get("timeout_seconds", 10),
     )

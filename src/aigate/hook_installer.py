@@ -226,7 +226,7 @@ def install_windsurf(project_dir: Path) -> list[str]:
 def install_aider(project_dir: Path) -> list[str]:
     """Install aigate lint-cmd into .aider.conf.yml."""
     conf_path = project_dir / ".aider.conf.yml"
-    aigate_lint = "aigate scan-modified"
+    aigate_lint = "aigate scan requirements.txt --skip-ai"
 
     if conf_path.exists():
         content = conf_path.read_text()

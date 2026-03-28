@@ -95,6 +95,71 @@ class TerminalReporter:
         elif report.cached:
             self.console.print("\n  (cached result)", style="dim")
 
+        if report.enrichment:
+            enrichment = report.enrichment
+            self.console.print("\n  External intelligence:", style="bold")
+
+            if enrichment.library_description:
+                self.console.print(
+                    f"    - Docs: {enrichment.library_description[:140]}",
+                    style="cyan",
+                )
+
+            if enrichment.repository_url:
+                self.console.print(
+                    f"    - Repository: {enrichment.repository_url}",
+                    style="cyan",
+                )
+
+            if enrichment.project_status:
+                self.console.print(
+                    f"    - Project status: {enrichment.project_status}",
+                    style="cyan",
+                )
+
+            if enrichment.known_vulnerabilities:
+                self.console.print("    - Known vulnerabilities:", style="bold")
+                for vuln in enrichment.known_vulnerabilities[:5]:
+                    line = f"{vuln.id} ({vuln.severity}): {vuln.summary}"
+                    if vuln.fixed_version:
+                        line += f" — fixed in {vuln.fixed_version}"
+                    self.console.print(f"      {line}", style="yellow")
+
+            if enrichment.security_mentions:
+                self.console.print("    - Security mentions:", style="bold")
+                for mention in enrichment.security_mentions[:3]:
+                    self.console.print(
+                        f"      [{mention.source}] {mention.title}",
+                        style="magenta",
+                    )
+
+            if enrichment.scorecard:
+                self.console.print(
+                    f"    - OpenSSF Scorecard: {enrichment.scorecard.score:.1f}/10",
+                    style="bold",
+                )
+                for finding in enrichment.scorecard.critical_findings[:3]:
+                    self.console.print(f"      {finding}", style="yellow")
+
+            if enrichment.provenance:
+                self.console.print(
+                    "    - Provenance: "
+                    f"{enrichment.provenance.status} "
+                    f"(available={enrichment.provenance.available}, "
+                    f"verified={enrichment.provenance.verified})",
+                    style="bold",
+                )
+                if enrichment.provenance.details:
+                    self.console.print(
+                        f"      {enrichment.provenance.details[:160]}",
+                        style="cyan",
+                    )
+
+            if enrichment.errors:
+                self.console.print("    - Enrichment errors:", style="bold red")
+                for error in enrichment.errors[:3]:
+                    self.console.print(f"      {error}", style="red")
+
         # Timing
         if report.total_latency_ms:
             self.console.print(f"\n  Total time: {report.total_latency_ms}ms", style="dim")

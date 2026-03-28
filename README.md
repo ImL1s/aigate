@@ -13,11 +13,11 @@ Intercepts `pip install` / `npm install` and uses multiple AI models to detect m
 - **Zero-Day Detection** — Reads code intent via LLMs, not just signature databases
 - **Static Pre-Filter** — Typosquatting, Shannon entropy, dangerous patterns, blocklist (no AI needed for 80%+ of checks)
 - **Version Diff Analysis** — Compares two releases to spot injected malware between versions
-- **Lockfile Scanning** — Batch-scan `requirements.txt`, `package-lock.json`, or `pubspec.lock`
+- **Lockfile Scanning** — Batch-scan `requirements.txt`, `uv.lock`, `package-lock.json`, `yarn.lock`, and `pnpm-lock.yaml`
 - **pip/npm Hooks** — Seamless integration with your package manager
 - **AI Tool Hooks** — Native integration with Claude Code, Gemini CLI, Cursor, and other AI coding tools
 - **GitHub Action** — CI/CD scanning with zero configuration
-- **Enrichment Pipeline** — Optional Context7, OSV, and web search for deeper intelligence
+- **Enrichment Pipeline** — Optional OSV, deps.dev, OpenSSF Scorecard, provenance, Context7, and web search signals
 
 ## Installation
 
@@ -136,9 +136,11 @@ aigate check <package-name> -e pypi --skip-ai --json
 
 ### Hook Behavior
 
-- **Blocks** packages flagged as `CRITICAL` or `HIGH` risk (typosquats, blocklisted, dangerous patterns)
-- **Allows** `MEDIUM`, `LOW`, or safe packages silently
-- **Skips** non-package commands, `pip install -r requirements.txt`, `pip install .`, system packages (`pip`, `setuptools`, `wheel`)
+- **Blocks** only packages that normalize to the shared `malicious` decision
+- **Allows** `needs_review` packages by default, but emits that decision in JSON output
+- **Scans** `pip install -r requirements.txt` and bare `npm install` / `yarn install` / `pnpm install` when a lockfile is present
+- **Skips** non-package commands, local path installs like `pip install .`, and system package upgrades (`pip`, `setuptools`, `wheel`)
+- Supports explicit bypass with `--no-aigate`
 - **Fail-open** — if aigate crashes or times out, the install proceeds
 - Supports: `pip`, `pip3`, `python -m pip`, `uv pip`, `npm`, `yarn`, `pnpm`
 
@@ -212,7 +214,28 @@ ecosystems:
 
 cache_dir: ~/.aigate/cache
 cache_ttl_hours: 168   # 7 days
+
+enrichment:
+  enabled: true
+  osv:
+    enabled: true
+  deps_dev:
+    enabled: true
+  scorecard:
+    enabled: true
+  provenance:
+    enabled: true
+  context7:
+    enabled: false
+  web_search:
+    enabled: false
 ```
+
+When `--json` is enabled, single-package reports include shared policy fields:
+
+- `decision`: `safe`, `needs_review`, or `malicious`
+- `exit_code`: normalized `0/1/2/3`
+- `should_block_install`: whether wrapper hooks should block locally
 
 ## Attack Type Coverage
 
@@ -281,10 +304,18 @@ aigate's pre-filter and AI analysis cover these real-world supply chain attack p
 | `prefilter.py` | Static checks: typosquat, entropy, dangerous patterns, blocklist |
 | `consensus.py` | Parallel multi-model analysis with weighted voting |
 | `backends/` | Claude (CLI), Gemini (CLI), Ollama (HTTP API) |
-| `enrichment/` | Context7 docs, OSV vulnerability DB, web search |
+| `enrichment/` | OSV, deps.dev, Scorecard, provenance, Context7, web search |
 | `reporters/` | Terminal (Rich), JSON, SARIF output formats |
 | `hooks/` | pip wrapper, npm wrapper for transparent interception |
 | `cache.py` | File-based result cache with configurable TTL |
+
+## CI Layering
+
+`aigate` is best used as the malicious-package / install-time behavior gate. For defense in depth, pair it with:
+
+- `actions/dependency-review-action` for dependency diff gating in PRs
+- `pip-audit` for Python environment CVEs
+- `osv-scanner` for lockfile / SBOM vulnerability coverage
 
 ## Contributing
 
