@@ -530,6 +530,52 @@ def init():
             f"\n[dim]Tip: Run 'aigate install-hooks' to set up hooks for: {tool_names}[/dim]"
         )
 
+    # Generate AI tool instruction files
+    from .instructions import generate_instruction_files
+
+    console.print("\n[bold]Generating AI tool instruction files...[/bold]")
+    instruction_messages = generate_instruction_files(Path.cwd())
+    for msg in instruction_messages:
+        if msg.startswith("(skip)"):
+            console.print(f"  [dim]{msg}[/dim]")
+        else:
+            console.print(f"  [green]{msg}[/green]")
+
+
+@main.command()
+@click.option(
+    "--tool",
+    "tools",
+    multiple=True,
+    default=None,
+    help="Specific tool(s) to generate for (e.g. --tool claude --tool cursor).",
+)
+def instructions(tools: tuple[str, ...]):
+    """Generate/update AI instruction files for all coding tools.
+
+    Writes aigate usage instructions into tool-specific files
+    (CLAUDE.md, GEMINI.md, AGENTS.md, .cursorrules, etc.)
+    so that LLMs automatically run aigate before installing packages.
+
+    Examples:
+        aigate instructions
+        aigate instructions --tool claude --tool gemini
+    """
+    from pathlib import Path
+
+    from .instructions import generate_instruction_files
+
+    tool_list = list(tools) if tools else None
+    messages = generate_instruction_files(Path.cwd(), tools=tool_list)
+    for msg in messages:
+        if msg.startswith("(skip)"):
+            console.print(f"  [dim]{msg}[/dim]")
+        else:
+            console.print(f"  [green]{msg}[/green]")
+
+    if not messages:
+        console.print("[yellow]No instruction files to generate.[/yellow]")
+
 
 @main.command()
 @click.pass_context
