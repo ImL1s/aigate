@@ -13,14 +13,18 @@ Intercepts `pip install` / `npm install` and uses multiple AI models to detect m
 
 ## Features
 
-- **AI Multi-Model Consensus** — Claude, Gemini, Ollama vote independently; weighted confidence scores with automatic disagreement detection
+- **AI Multi-Model Consensus** — Claude, Gemini, Codex, Ollama, and any OpenAI-compatible API vote independently; weighted confidence scores with automatic disagreement detection
 - **Zero-Day Detection** — Reads code intent via LLMs, not just signature databases
+- **Works With Any Setup** — Auto-detects installed tools; dynamic strategy from prefilter-only (0 models) to full consensus (3+ models)
 - **Static Pre-Filter** — Typosquatting, Shannon entropy, dangerous patterns, blocklist (no AI needed for 80%+ of checks)
 - **Version Diff Analysis** — Compares two releases to spot injected malware between versions
 - **Lockfile Scanning** — Batch-scan `requirements.txt`, `uv.lock`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, and `pubspec.lock`
+- **Offline Analysis** — Scan local source directories with `--local`, no network required
 - **pip/npm Hooks** — Seamless integration with your package manager
-- **AI Tool Hooks** — Native integration with Claude Code, Gemini CLI, Cursor, and other AI coding tools
+- **8 AI Tool Integrations** — Claude Code, Gemini CLI, Codex CLI, Cursor, Windsurf, Aider, OpenCode, Cline
+- **LLM-Native Instructions** — Auto-generates `CLAUDE.md`, `GEMINI.md`, `AGENTS.md`, `.cursorrules`, etc. so AI tools know to check packages
 - **GitHub Action** — CI/CD scanning with zero configuration
+- **Multiple Output Formats** — Terminal (Rich), JSON, and SARIF 2.1.0 (GitHub Security tab)
 - **Enrichment Pipeline** — Optional OSV, deps.dev, OpenSSF Scorecard, provenance, Context7, and web search signals
 
 ## Installation
@@ -42,11 +46,20 @@ uv venv && uv pip install -e ".[dev]"
 ## Quick Start
 
 ```bash
+# Auto-detect your AI tools and set up everything
+aigate init
+
+# Check what's available on your system
+aigate doctor
+
 # Check a single package (static pre-filter only, no AI keys needed)
 aigate check requests --skip-ai
 
 # Check a known typosquat
 aigate check crossenv --skip-ai
+
+# Full AI analysis (requires at least one AI backend installed)
+aigate check litellm -v 1.82.8
 
 # Compare two versions for suspicious changes
 aigate diff click 8.1.0 8.1.7 --skip-ai
@@ -54,11 +67,11 @@ aigate diff click 8.1.0 8.1.7 --skip-ai
 # Scan an entire lockfile
 aigate scan requirements.txt --skip-ai
 
-# Full AI analysis (requires Claude/Gemini CLI installed)
-aigate check litellm -v 1.82.8
+# Scan local source code offline
+aigate check mypackage --local ./path/to/source
 
-# Create a default config file
-aigate init
+# Output as SARIF (for GitHub Security tab)
+aigate check requests --sarif
 ```
 
 ### Exit Codes
@@ -70,72 +83,52 @@ aigate init
 | `2`  | Malicious — blocked |
 | `3`  | Error — analysis failed |
 
-## AI Tool Hook Integration
+## AI Tool Integration
 
-aigate integrates as a **PreToolUse hook** that automatically scans packages before `pip install` or `npm install` runs inside AI coding tools.
+aigate has two integration modes — use one or both:
 
-### Claude Code
+### Mode 1: LLM Instructions (recommended)
 
-#### Automatic Install
+`aigate init` auto-generates instruction files that teach AI tools to check packages proactively:
 
-```bash
-# Project-level (recommended)
-./scripts/install-hooks.sh
+| File | AI Tool |
+|------|---------|
+| `CLAUDE.md` | Claude Code |
+| `GEMINI.md` | Gemini CLI |
+| `AGENTS.md` | Codex CLI |
+| `.cursorrules` | Cursor |
+| `.windsurfrules` | Windsurf |
+| `.clinerules` | Cline |
+| `.github/copilot-instructions.md` | GitHub Copilot |
+| `CONVENTIONS.md` | OpenCode |
 
-# User-level (applies to all projects)
-./scripts/install-hooks.sh --user
-
-# Both
-./scripts/install-hooks.sh --both
-```
-
-#### Manual Install
-
-Add to `.claude/settings.json`:
-
-```json
-{
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/path/to/aigate/scripts/pretool-hook.sh",
-            "timeout": 30,
-            "statusMessage": "Scanning packages with aigate..."
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-### Gemini CLI
-
-Add to `~/.gemini/settings.json`:
-
-```json
-{
-  "preToolUse": {
-    "Bash": {
-      "command": "/path/to/aigate/scripts/pretool-hook.sh",
-      "timeout": 30
-    }
-  }
-}
-```
-
-### Cursor / Other AI Tools
-
-Any AI coding tool that supports pre-execution hooks can call the aigate CLI directly:
+The LLM reads these files and **proactively runs `aigate check`** before installing any package. No hooks needed.
 
 ```bash
-# In your tool's hook configuration:
-aigate check <package-name> -e pypi --skip-ai --json
-# Exit code 2 = block, 0 = allow
+# Generate all instruction files
+aigate instructions
+
+# Generate for specific tools only
+aigate instructions --tool claude --tool gemini
+```
+
+### Mode 2: PreToolUse Hooks
+
+For defense-in-depth, hooks intercept `pip install` / `npm install` commands at the tool level:
+
+```bash
+# Auto-detect installed tools and install hooks for all of them
+aigate install-hooks --auto
+
+# Install for a specific tool
+aigate install-hooks --tool claude
+aigate install-hooks --tool gemini
+aigate install-hooks --tool codex
+aigate install-hooks --tool cursor
+aigate install-hooks --tool windsurf
+aigate install-hooks --tool aider
+aigate install-hooks --tool opencode
+aigate install-hooks --tool cline
 ```
 
 ### Hook Behavior
@@ -172,7 +165,9 @@ See [docs/github-action.md](docs/github-action.md) for full options and examples
 
 ## Configuration
 
-Run `aigate init` to create a `.aigate.yml` in your project root. The config is searched upward from CWD to `~/`.
+Run `aigate init` to auto-detect your AI tools and create a `.aigate.yml` in your project root. The config is searched upward from CWD to `~/`.
+
+Use `aigate doctor` to diagnose your setup — see which backends are available, what consensus strategy is active, and which hooks are installed.
 
 ```yaml
 # .aigate.yml
@@ -191,6 +186,12 @@ models:
     enabled: true
     timeout_seconds: 120
 
+  # Codex CLI:
+  # - name: codex
+  #   backend: codex
+  #   model_id: o3
+  #   weight: 1.0
+
   # Local analysis (no data sent to cloud):
   # - name: ollama
   #   backend: ollama
@@ -198,6 +199,15 @@ models:
   #   weight: 0.7
   #   options:
   #     base_url: http://localhost:11434
+
+  # Any OpenAI-compatible API (OpenRouter, vLLM, llama.cpp, etc.):
+  # - name: deepseek-local
+  #   backend: openai_compat
+  #   model_id: deepseek-coder-v2
+  #   weight: 0.8
+  #   options:
+  #     base_url: http://localhost:11434/v1
+  #     api_key_env: OPENROUTER_API_KEY  # reads from env var
 
 thresholds:
   malicious: 0.6       # weighted confidence >= 0.6 → MALICIOUS
@@ -284,6 +294,8 @@ aigate's pre-filter and AI analysis cover these real-world supply chain attack p
               │    AI Consensus Engine   │
               │  ┌───────┐ ┌──────────┐ │
               │  │Claude │ │ Gemini   │ │  ← Parallel analysis
+              │  │Codex  │ │ Ollama   │ │  ← Any combo works
+              │  │OpenAI-compat (any) │ │
               │  └───┬───┘ └────┬─────┘ │
               │      │          │        │
               │  ┌───▼──────────▼───┐    │
@@ -304,15 +316,18 @@ aigate's pre-filter and AI analysis cover these real-world supply chain attack p
 
 | Module | Responsibility |
 |---|---|
-| `cli.py` | Click-based CLI entry point (`check`, `scan`, `diff`, `init`) |
+| `cli.py` | Click-based CLI entry point (`check`, `scan`, `diff`, `init`, `doctor`, `instructions`, `install-hooks`) |
 | `resolver.py` | Downloads source archives from PyPI/npm; never executes code |
 | `prefilter.py` | Static checks: typosquat, entropy, dangerous patterns, blocklist |
 | `consensus.py` | Parallel multi-model analysis with weighted voting |
-| `backends/` | Claude (CLI), Gemini (CLI), Ollama (HTTP API) |
+| `backends/` | Claude (CLI), Gemini (CLI), Codex (CLI), Ollama (HTTP), OpenAI-compat (any API) |
 | `enrichment/` | OSV, deps.dev, Scorecard, provenance, Context7, web search |
-| `reporters/` | Terminal (Rich), JSON, SARIF output formats |
+| `reporters/` | Terminal (Rich), JSON, SARIF 2.1.0 output formats |
 | `hooks/` | pip wrapper, npm wrapper for transparent interception |
-| `cache.py` | File-based result cache with configurable TTL |
+| `hook_installer.py` | Auto-install hooks for 8 AI tools |
+| `instructions.py` | Generate LLM instruction files (CLAUDE.md, GEMINI.md, etc.) |
+| `detect.py` | Auto-detect installed AI tools and generate config |
+| `cache.py` | File-based result cache with atomic writes and configurable TTL |
 
 ## CI Layering
 
