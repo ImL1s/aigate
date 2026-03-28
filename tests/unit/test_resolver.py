@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from aigate.models import PackageInfo
@@ -128,3 +129,290 @@ async def test_download_pub_source(monkeypatch):
     assert files == {
         "lib/http.dart": "https://pub.dev/api/archives/http-1.2.1.tar.gz:archive-bytes"
     }
+
+
+class _FakeErrorResponse:
+    """Simulates an HTTP error response (e.g. 404)."""
+
+    def __init__(self, status_code: int = 404):
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        raise httpx.HTTPStatusError(
+            f"Client error '{self.status_code}'",
+            request=httpx.Request("GET", "https://pub.dev/api/packages/nonexistent"),
+            response=httpx.Response(self.status_code),
+        )
+
+    def json(self):
+        return {}
+
+
+class TestPubDevResolver:
+    """pub.dev ecosystem-specific tests."""
+
+    @pytest.mark.asyncio
+    async def test_resolve_pub_metadata_fields(self, monkeypatch):
+        """Verify all metadata fields are extracted from pub.dev API response."""
+        responses = {
+            "https://pub.dev/api/packages/provider": _FakeResponse(
+                json_data={
+                    "name": "provider",
+                    "latest": {
+                        "version": "6.1.2",
+                        "pubspec": {
+                            "name": "provider",
+                            "version": "6.1.2",
+                            "description": "A wrapper around InheritedWidget",
+                            "publisher": "dash-overflow.net",
+                            "homepage": "https://github.com/rrousselGit/provider",
+                            "repository": "https://github.com/rrousselGit/provider",
+                            "dependencies": {
+                                "flutter": ">=3.0.0",
+                                "collection": "^1.15.0",
+                                "nested": "^2.0.0",
+                            },
+                        },
+                        "archive_url": "https://pub.dev/api/archives/provider-6.1.2.tar.gz",
+                        "published": "2024-05-10T10:00:00Z",
+                    },
+                }
+            )
+        }
+        monkeypatch.setattr(
+            "aigate.resolver.httpx.AsyncClient",
+            lambda **_: _FakeAsyncClient(responses),
+        )
+
+        pkg = await resolve_package("provider", None, "pub")
+
+        assert pkg.name == "provider"
+        assert pkg.version == "6.1.2"
+        assert pkg.ecosystem == "pub"
+        assert pkg.author == "dash-overflow.net"
+        assert pkg.description == "A wrapper around InheritedWidget"
+        assert pkg.homepage == "https://github.com/rrousselGit/provider"
+        assert pkg.repository == "https://github.com/rrousselGit/provider"
+        assert pkg.has_install_scripts is False
+        assert "flutter" in pkg.dependencies
+        assert "collection" in pkg.dependencies
+        assert "nested" in pkg.dependencies
+
+    @pytest.mark.asyncio
+    async def test_resolve_pub_specific_version(self, monkeypatch):
+        """Verify version-specific URL is used when version is provided."""
+        responses = {
+            "https://pub.dev/api/packages/http/versions/0.13.6": _FakeResponse(
+                json_data={
+                    "version": "0.13.6",
+                    "pubspec": {
+                        "name": "http",
+                        "version": "0.13.6",
+                        "description": "HTTP client (old)",
+                        "repository": "https://github.com/dart-lang/http",
+                        "dependencies": {"async": "^2.5.0", "http_parser": "^4.0.0"},
+                    },
+                    "archive_url": "https://pub.dev/api/archives/http-0.13.6.tar.gz",
+                }
+            )
+        }
+        monkeypatch.setattr(
+            "aigate.resolver.httpx.AsyncClient",
+            lambda **_: _FakeAsyncClient(responses),
+        )
+
+        pkg = await resolve_package("http", "0.13.6", "pub")
+
+        assert pkg.version == "0.13.6"
+        assert pkg.description == "HTTP client (old)"
+        assert "async" in pkg.dependencies
+        assert "http_parser" in pkg.dependencies
+
+    @pytest.mark.asyncio
+    async def test_resolve_pub_nonexistent_package(self, monkeypatch):
+        """Verify 404 from pub.dev raises an error."""
+        responses = {
+            "https://pub.dev/api/packages/nonexistent_xxx": _FakeErrorResponse(404),
+        }
+        monkeypatch.setattr(
+            "aigate.resolver.httpx.AsyncClient",
+            lambda **_: _FakeAsyncClient(responses),
+        )
+
+        with pytest.raises(httpx.HTTPStatusError):
+            await resolve_package("nonexistent_xxx", None, "pub")
+
+    @pytest.mark.asyncio
+    async def test_resolve_pub_missing_optional_fields(self, monkeypatch):
+        """Verify graceful handling when optional pubspec fields are absent."""
+        responses = {
+            "https://pub.dev/api/packages/minimal_pkg": _FakeResponse(
+                json_data={
+                    "name": "minimal_pkg",
+                    "latest": {
+                        "version": "0.0.1",
+                        "pubspec": {
+                            "name": "minimal_pkg",
+                            "version": "0.0.1",
+                            # No description, no publisher, no homepage, no repository,
+                            # no dependencies
+                        },
+                    },
+                }
+            )
+        }
+        monkeypatch.setattr(
+            "aigate.resolver.httpx.AsyncClient",
+            lambda **_: _FakeAsyncClient(responses),
+        )
+
+        pkg = await resolve_package("minimal_pkg", None, "pub")
+
+        assert pkg.name == "minimal_pkg"
+        assert pkg.version == "0.0.1"
+        assert pkg.author == ""
+        assert pkg.description == ""
+        assert pkg.homepage == ""
+        assert pkg.repository == ""
+        assert pkg.dependencies == []
+        assert pkg.has_install_scripts is False
+
+    @pytest.mark.asyncio
+    async def test_resolve_pub_homepage_fallback(self, monkeypatch):
+        """Verify homepage falls back to repository when homepage is absent."""
+        responses = {
+            "https://pub.dev/api/packages/repo_only": _FakeResponse(
+                json_data={
+                    "name": "repo_only",
+                    "latest": {
+                        "version": "1.0.0",
+                        "pubspec": {
+                            "name": "repo_only",
+                            "version": "1.0.0",
+                            "description": "Has repo but no homepage",
+                            "repository": "https://github.com/example/repo_only",
+                        },
+                    },
+                }
+            )
+        }
+        monkeypatch.setattr(
+            "aigate.resolver.httpx.AsyncClient",
+            lambda **_: _FakeAsyncClient(responses),
+        )
+
+        pkg = await resolve_package("repo_only", None, "pub")
+
+        # homepage should fall back to repository
+        assert pkg.homepage == "https://github.com/example/repo_only"
+        assert pkg.repository == "https://github.com/example/repo_only"
+
+    @pytest.mark.asyncio
+    async def test_download_pub_source_no_archive_url(self, monkeypatch):
+        """Verify empty dict when archive_url is missing."""
+        package = PackageInfo(name="broken", version="1.0.0", ecosystem="pub")
+        responses = {
+            "https://pub.dev/api/packages/broken/versions/1.0.0": _FakeResponse(
+                json_data={
+                    # No archive_url
+                    "version": "1.0.0",
+                    "pubspec": {"name": "broken"},
+                }
+            ),
+        }
+        monkeypatch.setattr(
+            "aigate.resolver.httpx.AsyncClient",
+            lambda **_: _FakeAsyncClient(responses),
+        )
+
+        files = await download_source(package)
+        assert files == {}
+
+
+class TestPubspecLockParsing:
+    """pubspec.lock lockfile parsing tests."""
+
+    def test_pubspec_lock_basic(self, tmp_path):
+        """Verify pubspec.lock is parsed into (name, version) pairs."""
+        lock_content = """\
+packages:
+  http:
+    dependency: "direct main"
+    description:
+      name: http
+      sha256: "abc123"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.2.0"
+  meta:
+    dependency: transitive
+    description:
+      name: meta
+      sha256: "def456"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.9.1"
+  collection:
+    dependency: "direct main"
+    description:
+      name: collection
+      sha256: "ghi789"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.18.0"
+"""
+        lockfile = tmp_path / "pubspec.lock"
+        lockfile.write_text(lock_content)
+
+        from aigate.cli import _parse_lockfile
+
+        packages = _parse_lockfile(str(lockfile))
+        names = [p[0] for p in packages]
+        versions = {p[0]: p[1] for p in packages}
+
+        assert "http" in names
+        assert "meta" in names
+        assert "collection" in names
+        assert versions["http"] == "1.2.0"
+        assert versions["meta"] == "1.9.1"
+        assert versions["collection"] == "1.18.0"
+
+    def test_pubspec_lock_empty(self, tmp_path):
+        """Verify empty pubspec.lock returns empty list."""
+        lockfile = tmp_path / "pubspec.lock"
+        lockfile.write_text("packages:\n")
+
+        from aigate.cli import _parse_lockfile
+
+        packages = _parse_lockfile(str(lockfile))
+        assert packages == []
+
+    def test_pubspec_lock_sdk_dependency(self, tmp_path):
+        """Verify SDK dependencies (flutter, dart) are parsed."""
+        lock_content = """\
+packages:
+  flutter:
+    dependency: "direct main"
+    description: flutter
+    source: sdk
+    version: "0.0.0"
+  cupertino_icons:
+    dependency: "direct main"
+    description:
+      name: cupertino_icons
+      sha256: "xyz"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.0.8"
+"""
+        lockfile = tmp_path / "pubspec.lock"
+        lockfile.write_text(lock_content)
+
+        from aigate.cli import _parse_lockfile
+
+        packages = _parse_lockfile(str(lockfile))
+        names = [p[0] for p in packages]
+
+        # SDK dependencies should still be parsed
+        assert "flutter" in names
+        assert "cupertino_icons" in names
