@@ -9,7 +9,7 @@ Analyze the package specified in `$ARGUMENTS` using the aigate CLI.
 Parse arguments: first arg is package name, optional second is version, optional third is ecosystem (default: pypi).
 
 ```bash
-cd /Users/iml1s/Documents/mine/aigate
+cd "$CLAUDE_PROJECT_DIR"
 # Run with AI analysis if backends available, fallback to --skip-ai
 .venv/bin/aigate check $ARGUMENTS || .venv/bin/aigate check $ARGUMENTS --skip-ai
 ```

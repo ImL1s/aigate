@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "jq -r '.tool_input.file_path // .tool_response.filePath' | { read -r f; [[ \"$f\" == *.py ]] && /Users/iml1s/Documents/mine/aigate/.venv/bin/ruff format \"$f\" 2>/dev/null; } || true",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath' | { read -r f; [[ \"$f\" == *.py ]] && ruff format \"$f\" 2>/dev/null; } || true",
             "timeout": 10,
             "statusMessage": "Formatting..."
           }
@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/iml1s/Documents/mine/aigate/scripts/pretool-hook.sh",
+            "command": "./scripts/pretool-hook.sh",
             "timeout": 30,
             "statusMessage": "Scanning packages with aigate..."
           }

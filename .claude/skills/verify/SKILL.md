@@ -6,7 +6,7 @@ description: Run lint, format check, and all tests to verify code quality before
 Run the following checks in order. Stop at the first failure:
 
 ```bash
-cd /Users/iml1s/Documents/mine/aigate
+cd "$CLAUDE_PROJECT_DIR"
 .venv/bin/ruff format --check src/ tests/
 .venv/bin/ruff check src/ tests/
 .venv/bin/python -m pytest tests/ -v
