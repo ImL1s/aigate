@@ -464,85 +464,56 @@ def install_hooks(tools: tuple[str, ...], project_dir: str):
 
 @main.command()
 def init():
-    """Create a default .aigate.yml configuration file."""
+    """Create a default .aigate.yml configuration file with auto-detected backends."""
     from pathlib import Path
+
+    from .detect import KNOWN_BACKENDS, detect_backends, detect_hooks, generate_config_yaml
 
     config_path = Path.cwd() / ".aigate.yml"
     if config_path.exists():
         console.print(f"[yellow]{config_path} already exists[/yellow]")
         return
 
-    default_config = """\
-# aigate configuration
-# Docs: https://github.com/ImL1s/aigate
+    # Detect backends
+    backends = detect_backends()
+    console.print("\n[bold]Detecting AI backends...[/bold]")
+    for template in KNOWN_BACKENDS:
+        found = any(b.name == template.name for b in backends)
+        icon = "[green]v[/green]" if found else "[dim]x[/dim]"
+        style = "green" if found else "dim"
+        hint = "" if found else f"  ({template.install_hint})"
+        console.print(f"  {icon} [{style}]{template.name}[/{style}]{hint}")
 
-models:
-  - name: claude
-    backend: claude
-    model_id: claude-sonnet-4-6
-    weight: 1.0
-    enabled: true
-    timeout_seconds: 120
+    # Detect hook tools
+    hooks = detect_hooks()
+    if hooks:
+        console.print("\n[bold]Detected hook-compatible tools:[/bold]")
+        for h in hooks:
+            console.print(f"  [green]v[/green] [green]{h.tool}[/green]")
 
-  - name: gemini
-    backend: gemini
-    model_id: gemini-2.5-pro
-    weight: 0.9
-    enabled: true
-    timeout_seconds: 120
+    # Generate config
+    yaml_content = generate_config_yaml(backends)
+    config_path.write_text(yaml_content)
 
-  # Uncomment for local analysis (no data sent to cloud):
-  # - name: ollama
-  #   backend: ollama
-  #   model_id: llama3.1:8b
-  #   weight: 0.7
-  #   enabled: true
-  #   timeout_seconds: 180
-  #   options:
-  #     base_url: http://localhost:11434
+    count = len(backends)
+    if count == 0:
+        console.print(
+            "\n[yellow]No AI backends found. Config created with prefilter-only mode.[/yellow]"
+        )
+    elif count == 1:
+        console.print(f"\n[green]Created {config_path} (single-model mode)[/green]")
+    elif count == 2:
+        console.print(f"\n[green]Created {config_path} (dual-model consensus)[/green]")
+    else:
+        console.print(
+            f"\n[green]Created {config_path} (full consensus with {count} backends)[/green]"
+        )
 
-thresholds:
-  malicious: 0.6
-  suspicious: 0.5
-  disagreement: 0.4
-
-whitelist:
-  # Packages you trust unconditionally:
-  # - requests
-  # - numpy
-
-blocklist:
-  # Known malicious packages:
-  # - crossenv
-  # - python3-dateutil
-
-ecosystems:
-  - pypi
-  - npm
-
-cache_dir: ~/.aigate/cache
-cache_ttl_hours: 168  # 7 days
-max_analysis_level: l2_deep
-output_format: rich  # rich | json | sarif
-
-enrichment:
-  enabled: false
-  timeout_seconds: 10
-  osv:
-    enabled: true
-  deps_dev:
-    enabled: false
-  scorecard:
-    enabled: false
-  provenance:
-    enabled: false
-  context7:
-    enabled: false
-  web_search:
-    enabled: false
-"""
-    config_path.write_text(default_config)
-    console.print(f"[green]Created {config_path}[/green]")
+    if hooks:
+        tool_names = ", ".join(h.tool for h in hooks)
+        console.print(
+            f"\n[dim]Tip: Run 'aigate install-hooks' to set up hooks for: {tool_names}[/dim]"
+        )
 
 
 def _format_source_for_ai(source_files: dict[str, str]) -> str:
