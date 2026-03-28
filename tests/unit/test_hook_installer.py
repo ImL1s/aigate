@@ -275,9 +275,12 @@ class TestInstallHooksCLI:
             main,
             [
                 "install-hooks",
-                "--tool", "cursor",
-                "--tool", "windsurf",
-                "--project-dir", str(tmp_path),
+                "--tool",
+                "cursor",
+                "--tool",
+                "windsurf",
+                "--project-dir",
+                str(tmp_path),
             ],
         )
         assert result.exit_code == 0

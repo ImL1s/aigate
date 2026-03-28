@@ -173,41 +173,29 @@ class TestW4spStealerDetection:
     """W4SP Stealer — PyPI packages stealing Discord tokens, browser creds, crypto wallets."""
 
     def test_flags_critical(self):
-        result = run_prefilter(
-            _pkg("typesutil", "0.1.3", ecosystem="pypi"), Config(), W4SP_FILES
-        )
+        result = run_prefilter(_pkg("typesutil", "0.1.3", ecosystem="pypi"), Config(), W4SP_FILES)
         assert result.risk_level in (RiskLevel.HIGH, RiskLevel.CRITICAL)
 
     def test_detects_base64_decode(self):
-        result = run_prefilter(
-            _pkg("typesutil", "0.1.3", ecosystem="pypi"), Config(), W4SP_FILES
-        )
+        result = run_prefilter(_pkg("typesutil", "0.1.3", ecosystem="pypi"), Config(), W4SP_FILES)
         assert any("b64decode" in s for s in result.risk_signals)
 
     def test_detects_exec(self):
-        result = run_prefilter(
-            _pkg("typesutil", "0.1.3", ecosystem="pypi"), Config(), W4SP_FILES
-        )
+        result = run_prefilter(_pkg("typesutil", "0.1.3", ecosystem="pypi"), Config(), W4SP_FILES)
         assert any("exec" in s.lower() for s in result.risk_signals)
 
     def test_detects_network_exfiltration(self):
-        result = run_prefilter(
-            _pkg("typesutil", "0.1.3", ecosystem="pypi"), Config(), W4SP_FILES
-        )
+        result = run_prefilter(_pkg("typesutil", "0.1.3", ecosystem="pypi"), Config(), W4SP_FILES)
         assert any("urlopen" in s.lower() or "request" in s.lower() for s in result.risk_signals)
 
     def test_detects_high_entropy_obfuscation(self):
         """Obfuscated loader should trigger high entropy detection."""
-        result = run_prefilter(
-            _pkg("typesutil", "0.1.3", ecosystem="pypi"), Config(), W4SP_FILES
-        )
+        result = run_prefilter(_pkg("typesutil", "0.1.3", ecosystem="pypi"), Config(), W4SP_FILES)
         assert any("high_entropy" in s for s in result.risk_signals)
 
     def test_detects_env_token_access(self):
         """Should detect code scanning env vars for TOKEN/KEY/SECRET."""
-        result = run_prefilter(
-            _pkg("typesutil", "0.1.3", ecosystem="pypi"), Config(), W4SP_FILES
-        )
+        result = run_prefilter(_pkg("typesutil", "0.1.3", ecosystem="pypi"), Config(), W4SP_FILES)
         # The stealer accesses os.environ for TOKEN/KEY/SECRET patterns
         # Prefilter should catch .env or the urlopen/exec patterns
         assert result.needs_ai_review or not result.passed

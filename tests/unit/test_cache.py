@@ -16,9 +16,7 @@ from aigate.models import (
 def _make_report() -> AnalysisReport:
     return AnalysisReport(
         package=PackageInfo(name="testpkg", version="1.0.0", ecosystem="pypi"),
-        prefilter=PrefilterResult(
-            passed=True, reason="safe", risk_level=RiskLevel.NONE
-        ),
+        prefilter=PrefilterResult(passed=True, reason="safe", risk_level=RiskLevel.NONE),
     )
 
 
