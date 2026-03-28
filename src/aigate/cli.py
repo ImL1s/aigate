@@ -432,7 +432,9 @@ def _strip_version_prefix(path: str) -> str:
     "tools",
     multiple=True,
     required=True,
-    type=click.Choice(["claude", "gemini", "codex", "cursor", "windsurf", "aider", "all"]),
+    type=click.Choice(
+        ["claude", "gemini", "codex", "cursor", "windsurf", "aider", "opencode", "cline", "all"]
+    ),
     help="AI tool to install hooks for (repeatable, or 'all')",
 )
 @click.option(

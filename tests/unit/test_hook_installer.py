@@ -7,10 +7,12 @@ import json
 from aigate.hook_installer import (
     install_aider,
     install_claude,
+    install_cline,
     install_codex,
     install_cursor,
     install_gemini,
     install_hooks,
+    install_opencode,
     install_windsurf,
 )
 
@@ -186,6 +188,70 @@ class TestInstallAider:
 
 
 # ---------------------------------------------------------------------------
+# OpenCode
+# ---------------------------------------------------------------------------
+
+
+class TestInstallOpencode:
+    def test_creates_plugin(self, tmp_path):
+        msgs = install_opencode(tmp_path)
+        assert any("opencode" in m.lower() or "Added" in m for m in msgs)
+        plugin_dir = tmp_path / ".opencode" / "plugins"
+        assert plugin_dir.exists()
+        plugin_files = list(plugin_dir.glob("aigate*"))
+        assert len(plugin_files) >= 1
+
+    def test_plugin_content(self, tmp_path):
+        install_opencode(tmp_path)
+        plugin_file = tmp_path / ".opencode" / "plugins" / "aigate-scanner.mjs"
+        content = plugin_file.read_text()
+        assert "beforeToolCall" in content
+        assert "pip" in content
+        assert "npm" in content
+        assert "aigate check" in content
+
+    def test_skip_duplicate(self, tmp_path):
+        install_opencode(tmp_path)
+        msgs = install_opencode(tmp_path)
+        assert any("skip" in m.lower() for m in msgs)
+
+
+# ---------------------------------------------------------------------------
+# Cline
+# ---------------------------------------------------------------------------
+
+
+class TestInstallCline:
+    def test_creates_rules_file(self, tmp_path):
+        msgs = install_cline(tmp_path)
+        assert any("cline" in m.lower() or "Added" in m for m in msgs)
+        rules_file = tmp_path / ".clinerules"
+        assert rules_file.exists()
+        content = rules_file.read_text()
+        assert "aigate" in content
+        assert "aigate check" in content
+        assert "pip install" in content
+        assert "npm install" in content
+
+    def test_appends_to_existing(self, tmp_path):
+        rules_file = tmp_path / ".clinerules"
+        rules_file.write_text("# Existing rules\nAlways use TypeScript.\n")
+        install_cline(tmp_path)
+        content = rules_file.read_text()
+        assert "Existing rules" in content
+        assert "Always use TypeScript." in content
+        assert "aigate" in content
+
+    def test_skip_duplicate(self, tmp_path):
+        install_cline(tmp_path)
+        msgs = install_cline(tmp_path)
+        assert any("skip" in m.lower() for m in msgs)
+        # Content should not be duplicated
+        content = (tmp_path / ".clinerules").read_text()
+        assert content.count("=== aigate") == 1
+
+
+# ---------------------------------------------------------------------------
 # Dispatcher: install_hooks()
 # ---------------------------------------------------------------------------
 
@@ -209,9 +275,11 @@ class TestInstallHooksDispatcher:
         assert (tmp_path / ".cursor" / "hooks.json").exists()
         assert (tmp_path / ".windsurf" / "hooks.json").exists()
         assert (tmp_path / ".aider.conf.yml").exists()
-        # Should have 6 success messages
+        assert (tmp_path / ".opencode" / "plugins" / "aigate-scanner.mjs").exists()
+        assert (tmp_path / ".clinerules").exists()
+        # Should have 8 success messages (all tools)
         added = [m for m in msgs if "Added" in m]
-        assert len(added) == 6
+        assert len(added) == 8
 
     def test_unknown_tool(self, tmp_path):
         msgs = install_hooks(["nonexistent"], tmp_path)
@@ -221,7 +289,7 @@ class TestInstallHooksDispatcher:
         install_hooks(["all"], tmp_path)
         msgs = install_hooks(["all"], tmp_path)
         skipped = [m for m in msgs if "skip" in m]
-        assert len(skipped) == 6
+        assert len(skipped) == 8
 
 
 # ---------------------------------------------------------------------------
