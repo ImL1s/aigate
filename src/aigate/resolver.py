@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import tarfile
 import zipfile
 from pathlib import Path
@@ -288,6 +289,10 @@ SKIP_EXTENSIONS = {
     ".ico",
 }
 
+MAX_LOCAL_SOURCE_SIZE = MAX_ARCHIVE_SIZE  # 50MB — same limit as archive downloads
+
+SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv"}
+
 
 def read_local_source(path: Path) -> str:
     """Read source code from a local file or directory for analysis."""
@@ -298,10 +303,25 @@ def read_local_source(path: Path) -> str:
     if path.is_file():
         return path.read_text(errors="replace")
 
+    cumulative_size = 0
     parts: list[str] = []
-    for f in sorted(path.rglob("*")):
-        if f.is_file() and f.suffix not in SKIP_EXTENSIONS:
+    for root_str, dirs, files in os.walk(path):
+        # Skip hidden / non-essential directories in-place so os.walk won't descend
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
+        root = Path(root_str)
+        for fname in sorted(files):
+            f = root / fname
+            if f.suffix in SKIP_EXTENSIONS:
+                continue
             try:
+                size = f.stat().st_size
+                cumulative_size += size
+                if cumulative_size > MAX_LOCAL_SOURCE_SIZE:
+                    logger.warning(
+                        "Local source size limit reached (%d bytes), stopping read",
+                        MAX_LOCAL_SOURCE_SIZE,
+                    )
+                    return "\n\n".join(parts)
                 text = f.read_text(errors="replace")
                 parts.append(f"# --- {f.relative_to(path)} ---\n{text}")
             except (OSError, UnicodeDecodeError):

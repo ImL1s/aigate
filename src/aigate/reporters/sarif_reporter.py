@@ -29,15 +29,15 @@ class SarifReporter:
     Uses plain dicts + json.dumps — no external SARIF library required.
     """
 
-    def to_sarif(self, report: AnalysisReport) -> str:
-        """Convert an AnalysisReport to a SARIF 2.1.0 JSON string."""
+    @staticmethod
+    def _result_entry(report: AnalysisReport) -> dict:
+        """Build a single SARIF result dict from an AnalysisReport."""
         decision = decision_from_report(report)
         verdict = report.consensus.final_verdict if report.consensus else Verdict.SAFE
         risk_signals = (
             report.consensus.risk_signals if report.consensus else report.prefilter.risk_signals
         )
-
-        result_entry: dict = {
+        return {
             "ruleId": "aigate/supply-chain-risk",
             "level": VERDICT_TO_LEVEL.get(verdict, "none"),
             "message": {
@@ -53,6 +53,10 @@ class SarifReporter:
                 "ecosystem": report.package.ecosystem,
             },
         }
+
+    def to_sarif_multi(self, reports: list[AnalysisReport]) -> str:
+        """Convert multiple AnalysisReports to a single SARIF 2.1.0 JSON string."""
+        results_list = [self._result_entry(report) for report in reports]
 
         sarif: dict = {
             "$schema": SARIF_SCHEMA,
@@ -74,12 +78,16 @@ class SarifReporter:
                             ],
                         },
                     },
-                    "results": [result_entry],
+                    "results": results_list,
                 },
             ],
         }
 
         return json.dumps(sarif, indent=2)
+
+    def to_sarif(self, report: AnalysisReport) -> str:
+        """Convert an AnalysisReport to a SARIF 2.1.0 JSON string."""
+        return self.to_sarif_multi([report])
 
     def print_report(self, report: AnalysisReport) -> None:
         """Print SARIF JSON to stdout."""

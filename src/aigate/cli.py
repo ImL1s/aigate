@@ -777,63 +777,7 @@ def _print_json(payload: dict) -> None:
 
 def _print_scan_sarif(reports: list[AnalysisReport]) -> None:
     """Print a single SARIF document containing results for all scanned packages."""
-    import json as json_mod
-
-    from .reporters.sarif_reporter import SARIF_SCHEMA, VERDICT_TO_LEVEL
-
-    results_list = []
-    for report in reports:
-        decision = decision_from_report(report)
-        verdict = report.consensus.final_verdict if report.consensus else Verdict.SAFE
-        risk_signals = (
-            report.consensus.risk_signals if report.consensus else report.prefilter.risk_signals
-        )
-        results_list.append(
-            {
-                "ruleId": "aigate/supply-chain-risk",
-                "level": VERDICT_TO_LEVEL.get(verdict, "none"),
-                "message": {
-                    "text": (
-                        f"Package {report.package.name}@{report.package.version} "
-                        f"({report.package.ecosystem}): {decision.reason}. "
-                        f"Risk signals: "
-                        f"{', '.join(risk_signals) if risk_signals else 'none'}"
-                    ),
-                },
-                "properties": {
-                    "verdict": str(verdict),
-                    "confidence": (report.consensus.confidence if report.consensus else 0.0),
-                    "ecosystem": report.package.ecosystem,
-                },
-            }
-        )
-
-    sarif = {
-        "$schema": SARIF_SCHEMA,
-        "version": "2.1.0",
-        "runs": [
-            {
-                "tool": {
-                    "driver": {
-                        "name": "aigate",
-                        "version": __version__,
-                        "informationUri": "https://github.com/aetherclouds/aigate",
-                        "rules": [
-                            {
-                                "id": "aigate/supply-chain-risk",
-                                "shortDescription": {
-                                    "text": "AI-powered supply chain risk detection",
-                                },
-                            },
-                        ],
-                    },
-                },
-                "results": results_list,
-            },
-        ],
-    }
-
-    json_mod.dump(sarif, sys.stdout, indent=2)
+    sys.stdout.write(SarifReporter().to_sarif_multi(reports))
     sys.stdout.write("\n")
 
 

@@ -6,7 +6,14 @@ import httpx
 import pytest
 
 from aigate.models import PackageInfo
-from aigate.resolver import _extract_archive, _is_path_safe, download_source, resolve_package
+from aigate.resolver import (
+    SKIP_DIRS,
+    _extract_archive,
+    _is_path_safe,
+    download_source,
+    read_local_source,
+    resolve_package,
+)
 
 
 class TestPathSafe:
@@ -416,3 +423,58 @@ packages:
         # SDK dependencies should still be parsed
         assert "flutter" in names
         assert "cupertino_icons" in names
+
+
+class TestReadLocalSource:
+    """Tests for read_local_source size guard and directory skipping."""
+
+    def test_reads_simple_directory(self, tmp_path):
+        (tmp_path / "main.py").write_text("print('hello')")
+        result = read_local_source(tmp_path)
+        assert "print('hello')" in result
+
+    def test_skips_hidden_and_venv_dirs(self, tmp_path):
+        for skip_dir in SKIP_DIRS:
+            d = tmp_path / skip_dir
+            d.mkdir()
+            (d / "secret.py").write_text(f"# inside {skip_dir}")
+
+        (tmp_path / "app.py").write_text("# visible")
+        result = read_local_source(tmp_path)
+
+        assert "# visible" in result
+        for skip_dir in SKIP_DIRS:
+            assert f"# inside {skip_dir}" not in result
+
+    def test_size_guard_stops_reading(self, tmp_path, monkeypatch):
+        """Cumulative size guard stops reading once limit is exceeded."""
+        # Set a tiny limit so we can trigger it easily
+        monkeypatch.setattr("aigate.resolver.MAX_LOCAL_SOURCE_SIZE", 50)
+
+        (tmp_path / "a.py").write_text("A" * 30)
+        (tmp_path / "b.py").write_text("B" * 30)
+        (tmp_path / "c.py").write_text("C" * 30)
+
+        result = read_local_source(tmp_path)
+
+        # a.py (30 bytes) should be included, b.py (cumulative 60 > 50) triggers stop
+        assert "A" * 30 in result
+        # c.py should definitely not be included
+        assert "C" * 30 not in result
+
+    def test_single_file_reads_directly(self, tmp_path):
+        f = tmp_path / "script.py"
+        f.write_text("x = 42")
+        result = read_local_source(f)
+        assert result == "x = 42"
+
+    def test_nonexistent_path_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            read_local_source(tmp_path / "nope")
+
+    def test_skip_extensions_honored(self, tmp_path):
+        (tmp_path / "readme.md").write_text("# Title")
+        (tmp_path / "app.py").write_text("code()")
+        result = read_local_source(tmp_path)
+        assert "# Title" not in result
+        assert "code()" in result

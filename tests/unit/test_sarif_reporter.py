@@ -155,3 +155,60 @@ def test_sarif_tool_has_rules():
     rules = sarif["runs"][0]["tool"]["driver"]["rules"]
     assert len(rules) >= 1
     assert rules[0]["id"] == "aigate/supply-chain-risk"
+
+
+def test_sarif_multi_empty():
+    """to_sarif_multi with empty list produces valid SARIF with no results."""
+    reporter = SarifReporter()
+    sarif = json.loads(reporter.to_sarif_multi([]))
+    assert sarif["version"] == "2.1.0"
+    assert sarif["runs"][0]["results"] == []
+
+
+def test_sarif_multi_multiple_reports():
+    """to_sarif_multi merges multiple reports into one SARIF document."""
+    report_a = _make_report(Verdict.MALICIOUS)
+    report_b = AnalysisReport(
+        package=PackageInfo(name="good-pkg", version="2.0.0", ecosystem="npm"),
+        prefilter=PrefilterResult(
+            passed=True,
+            reason="no issues",
+            risk_signals=[],
+            risk_level=RiskLevel.LOW,
+        ),
+        consensus=ConsensusResult(
+            final_verdict=Verdict.SAFE,
+            confidence=0.99,
+            model_results=[
+                ModelResult(
+                    model_name="gemini",
+                    verdict=Verdict.SAFE,
+                    confidence=0.99,
+                    reasoning="Looks safe",
+                    risk_signals=[],
+                    analysis_level="l1_quick",
+                    latency_ms=800,
+                ),
+            ],
+            has_disagreement=False,
+            summary="Safe package",
+            risk_signals=[],
+        ),
+    )
+
+    reporter = SarifReporter()
+    sarif = json.loads(reporter.to_sarif_multi([report_a, report_b]))
+
+    results = sarif["runs"][0]["results"]
+    assert len(results) == 2
+    assert results[0]["level"] == "error"  # MALICIOUS
+    assert results[1]["level"] == "note"  # SAFE
+    assert "evil-pkg" in results[0]["message"]["text"]
+    assert "good-pkg" in results[1]["message"]["text"]
+
+
+def test_sarif_single_delegates_to_multi():
+    """to_sarif() and to_sarif_multi([report]) produce identical output."""
+    reporter = SarifReporter()
+    report = _make_report()
+    assert reporter.to_sarif(report) == reporter.to_sarif_multi([report])
