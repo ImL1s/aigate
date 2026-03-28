@@ -144,6 +144,14 @@ def _aggregate_votes(
     model_configs: list[ModelConfig],
 ) -> ConsensusResult:
     """Aggregate model votes using weighted consensus."""
+    # Recommendation map (used by both fast path and full voting)
+    recommendations = {
+        Verdict.SAFE: "Package appears safe to install.",
+        Verdict.SUSPICIOUS: "Proceed with caution. Review the flagged risk signals manually.",
+        Verdict.MALICIOUS: "DO NOT INSTALL. This package shows signs of malicious behavior.",
+        Verdict.NEEDS_HUMAN_REVIEW: "Models disagree. Manual review required before installation.",
+    }
+
     # Filter out errors
     valid = [r for r in results if r.verdict != Verdict.ERROR]
     if not valid:
@@ -152,6 +160,19 @@ def _aggregate_votes(
             confidence=0.0,
             model_results=results,
             summary="All models returned errors",
+        )
+
+    # Single-model fast path: no voting needed
+    if len(valid) == 1:
+        r = valid[0]
+        return ConsensusResult(
+            final_verdict=r.verdict,
+            confidence=r.confidence,
+            model_results=results,
+            has_disagreement=False,
+            summary=f"Single-model analysis: {r.model_name}={r.verdict.value}({r.confidence:.0%})",
+            risk_signals=r.risk_signals,
+            recommendation=recommendations.get(r.verdict, ""),
         )
 
     # Build weight map
@@ -210,14 +231,6 @@ def _aggregate_votes(
         f"{r.model_name}={r.verdict.value}({r.confidence:.0%})" for r in valid
     )
     summary = f"Consensus: {final.value} | Models: [{model_verdicts}]"
-
-    # Recommendation
-    recommendations = {
-        Verdict.SAFE: "Package appears safe to install.",
-        Verdict.SUSPICIOUS: "Proceed with caution. Review the flagged risk signals manually.",
-        Verdict.MALICIOUS: "DO NOT INSTALL. This package shows signs of malicious behavior.",
-        Verdict.NEEDS_HUMAN_REVIEW: "Models disagree. Manual review required before installation.",
-    }
 
     return ConsensusResult(
         final_verdict=final,

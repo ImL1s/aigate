@@ -98,3 +98,39 @@ class TestAggregateVotes:
         assert "env_access" in c.risk_signals
         # Deduplication
         assert c.risk_signals.count("network_call") == 1
+
+    def test_single_model_fast_path(self):
+        """With only 1 valid result, skip voting and return directly."""
+        results = [_result("claude", Verdict.SUSPICIOUS, 0.75)]
+        c = _aggregate_votes(results, _config(), _models("claude"))
+        assert c.final_verdict == Verdict.SUSPICIOUS
+        assert c.confidence == 0.75
+        assert c.summary.startswith("Single-model")
+        assert "claude" in c.summary
+        assert not c.has_disagreement
+
+    def test_single_model_fast_path_with_errors(self):
+        """When multiple results exist but only 1 is valid, use fast path."""
+        results = [
+            _result("claude", Verdict.ERROR, 0.0),
+            _result("gemini", Verdict.MALICIOUS, 0.9),
+        ]
+        c = _aggregate_votes(results, _config(), _models("claude", "gemini"))
+        assert c.final_verdict == Verdict.MALICIOUS
+        assert c.summary.startswith("Single-model")
+
+    def test_single_model_risk_signals_preserved(self):
+        """Single-model fast path preserves risk signals."""
+        r = _result("claude", Verdict.SUSPICIOUS, 0.8)
+        r.risk_signals = ["base64_decode", "network_call"]
+        c = _aggregate_votes([r], _config(), _models("claude"))
+        assert c.risk_signals == ["base64_decode", "network_call"]
+
+    def test_zero_valid_models_returns_error(self):
+        """When all models return errors, result is ERROR."""
+        results = [
+            _result("claude", Verdict.ERROR, 0.0),
+        ]
+        c = _aggregate_votes(results, _config(), _models("claude"))
+        assert c.final_verdict == Verdict.ERROR
+        assert "errors" in c.summary.lower()
