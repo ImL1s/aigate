@@ -272,6 +272,43 @@ def _extract_archive(content: bytes, filename: str) -> dict[str, str]:
     return files
 
 
+SKIP_EXTENSIONS = {
+    ".md",
+    ".rst",
+    ".txt",
+    ".csv",
+    ".json",
+    ".yml",
+    ".yaml",
+    ".toml",
+    ".lock",
+    ".png",
+    ".jpg",
+    ".gif",
+    ".ico",
+}
+
+
+def read_local_source(path: Path) -> str:
+    """Read source code from a local file or directory for analysis."""
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Path not found: {path}")
+
+    if path.is_file():
+        return path.read_text(errors="replace")
+
+    parts: list[str] = []
+    for f in sorted(path.rglob("*")):
+        if f.is_file() and f.suffix not in SKIP_EXTENSIONS:
+            try:
+                text = f.read_text(errors="replace")
+                parts.append(f"# --- {f.relative_to(path)} ---\n{text}")
+            except (OSError, UnicodeDecodeError):
+                continue
+    return "\n\n".join(parts)
+
+
 def _extract_repo_url(project_urls: dict[str, str] | None) -> str:
     if not project_urls:
         return ""

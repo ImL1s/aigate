@@ -38,8 +38,9 @@ from .policy import (
 )
 from .prefilter import run_prefilter
 from .reporters.json_reporter import JsonReporter
+from .reporters.sarif_reporter import SarifReporter
 from .reporters.terminal import TerminalReporter
-from .resolver import download_source, resolve_package
+from .resolver import download_source, read_local_source, resolve_package
 
 console = Console()
 
@@ -70,6 +71,7 @@ def main(ctx, verbose, quiet):
     help="Package ecosystem",
 )
 @click.option("--json", "use_json", is_flag=True, help="Output as JSON")
+@click.option("--sarif", "use_sarif", is_flag=True, help="Output as SARIF 2.1.0")
 @click.option(
     "--level",
     "-l",
@@ -78,19 +80,30 @@ def main(ctx, verbose, quiet):
     help="Analysis depth",
 )
 @click.option("--skip-ai", is_flag=True, help="Only run static pre-filter, skip AI analysis")
+@click.option(
+    "--local",
+    "local_path",
+    type=click.Path(exists=True),
+    default=None,
+    help="Analyze local source path instead of downloading from registry.",
+)
 def check(
     package: str,
     pkg_version: str | None,
     ecosystem: str,
     use_json: bool,
+    use_sarif: bool,
     level: str,
     skip_ai: bool,
+    local_path: str | None,
 ):
     """Analyze a single package for security risks.
 
     Example: aigate check litellm -v 1.82.8
     """
-    asyncio.run(_check(package, pkg_version, ecosystem, use_json, level, skip_ai))
+    asyncio.run(
+        _check(package, pkg_version, ecosystem, use_json, use_sarif, level, skip_ai, local_path)
+    )
 
 
 async def _check(
@@ -98,48 +111,64 @@ async def _check(
     pkg_version: str | None,
     ecosystem: str,
     use_json: bool,
+    use_sarif: bool,
     level_str: str,
     skip_ai: bool,
+    local_path: str | None = None,
 ):
     config = Config.load()
     level = AnalysisLevel(level_str)
     start = time.monotonic()
 
-    # 1. Resolve package
-    with console.status(f"Resolving {package_name}..."):
-        try:
-            package = await resolve_package(package_name, pkg_version, ecosystem)
-        except Exception as e:
-            _emit_error(
-                use_json=use_json,
-                package_name=package_name,
-                package_version=pkg_version or "",
-                ecosystem=ecosystem,
-                message=f"Failed to resolve package: {e}",
+    if local_path:
+        # Offline mode: skip registry, read local source directly
+        from pathlib import Path as FilePath
+
+        package = PackageInfo(
+            name=package_name,
+            version=pkg_version or "local",
+            ecosystem=ecosystem,
+        )
+        local_source = read_local_source(FilePath(local_path))
+        source_files = {"local": local_source}
+    else:
+        # 1. Resolve package
+        with console.status(f"Resolving {package_name}..."):
+            try:
+                package = await resolve_package(package_name, pkg_version, ecosystem)
+            except Exception as e:
+                _emit_error(
+                    use_json=use_json,
+                    package_name=package_name,
+                    package_version=pkg_version or "",
+                    ecosystem=ecosystem,
+                    message=f"Failed to resolve package: {e}",
+                )
+
+        # 1.5 Check cache
+        cached = get_cached(
+            package.name,
+            package.version,
+            ecosystem,
+            config.cache_dir,
+            config.cache_ttl_hours,
+        )
+        if cached and skip_ai:
+            total_ms = int((time.monotonic() - start) * 1000)
+            if not use_json:
+                console.print("[dim](cached result)[/dim]")
+            report = _report_from_cached(
+                cached, fallback_package=package, total_latency_ms=total_ms
             )
+            _print_report_and_exit(report, use_json)
 
-    # 1.5 Check cache
-    cached = get_cached(
-        package.name,
-        package.version,
-        ecosystem,
-        config.cache_dir,
-        config.cache_ttl_hours,
-    )
-    if cached and skip_ai:
-        total_ms = int((time.monotonic() - start) * 1000)
-        if not use_json:
-            console.print("[dim](cached result)[/dim]")
-        report = _report_from_cached(cached, fallback_package=package, total_latency_ms=total_ms)
-        _print_report_and_exit(report, use_json)
-
-    # 2. Download source
-    with console.status(f"Downloading {package.name}=={package.version}..."):
-        try:
-            source_files = await download_source(package)
-        except Exception as e:
-            console.print(f"[yellow]Warning: Could not download source: {e}[/yellow]")
-            source_files = {}
+        # 2. Download source
+        with console.status(f"Downloading {package.name}=={package.version}..."):
+            try:
+                source_files = await download_source(package)
+            except Exception as e:
+                console.print(f"[yellow]Warning: Could not download source: {e}[/yellow]")
+                source_files = {}
 
     # 3. Static pre-filter
     prefilter_result = run_prefilter(package, config, source_files)
@@ -819,8 +848,17 @@ def _emit_error(
     sys.exit(3)
 
 
-def _print_report_and_exit(report: AnalysisReport, use_json: bool) -> None:
-    reporter = JsonReporter() if use_json else TerminalReporter(console)
+def _print_report_and_exit(
+    report: AnalysisReport,
+    use_json: bool,
+    use_sarif: bool = False,
+) -> None:
+    if use_sarif:
+        reporter = SarifReporter()
+    elif use_json:
+        reporter = JsonReporter()
+    else:
+        reporter = TerminalReporter(console)
     reporter.print_report(report)
     sys.exit(decision_from_report(report).exit_code)
 
