@@ -22,13 +22,11 @@ def test_codex_backend_custom_model():
     assert backend.model_id == "codex-mini-latest"
 
 
-def test_codex_binary_not_found(monkeypatch):
-    monkeypatch.setattr("shutil.which", lambda _: None)
+async def test_codex_binary_not_found(monkeypatch):
+    monkeypatch.setattr("aigate.backends.codex.shutil.which", lambda _: None)
     backend = CodexBackend()
     with pytest.raises(RuntimeError, match="Codex CLI not found"):
-        import asyncio
-
-        asyncio.run(backend.analyze("test prompt"))
+        await backend.analyze("test prompt")
 
 
 async def test_codex_analyze_calls_subprocess(monkeypatch):

@@ -246,13 +246,19 @@ export default function aigatePlugin(context) {
         const cmd = input?.command || input?.cmd || "";
         const installPattern = /\\b(pip|npm|yarn|pnpm)\\s+install\\b/;
         if (!installPattern.test(cmd)) return;
-        // Extract package names and run aigate check
+        // Extract package names and run aigate check individually
         const { execSync } = await import("child_process");
-        try {
-          execSync(`aigate check ${cmd}`, { timeout: 30000 });
-        } catch (e) {
-          if (e.status === 2) {
-            return { blocked: true, reason: "aigate: malicious package detected" };
+        const parts = cmd.split(/\\s+/);
+        const installIdx = parts.findIndex(p => p === "install" || p === "add");
+        if (installIdx === -1) return;
+        const pkgs = parts.slice(installIdx + 1).filter(s => !s.startsWith("-"));
+        for (const pkg of pkgs) {
+          try {
+            execSync(`aigate check ${JSON.stringify(pkg)}`, { timeout: 30000 });
+          } catch (e) {
+            if (e.status === 2) {
+              return { blocked: true, reason: "aigate: malicious package detected" };
+            }
           }
         }
       },

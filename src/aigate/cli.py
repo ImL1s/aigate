@@ -563,7 +563,10 @@ def doctor(ctx):
         console.print(
             f"  [green]\u2713[/green] Loaded .aigate.yml ({len(config.models)} models configured)"
         )
-    except Exception:
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        import logging
+
+        logging.debug("Config load failed: %s", exc)
         console.print("  [yellow]![/yellow] No .aigate.yml found (using defaults)")
 
     # 4. Hooks

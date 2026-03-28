@@ -69,12 +69,20 @@ def test_detect_hooks_finds_installed_tools(monkeypatch):
     tool_names = {h.tool for h in hooks}
     assert "claude" in tool_names
     assert "codex" in tool_names
+    # File-based tools are always included
+    assert "cline" in tool_names
+    assert "opencode" in tool_names
 
 
 def test_detect_hooks_none_installed(monkeypatch):
     monkeypatch.setattr("aigate.detect.shutil.which", lambda name: None)
     hooks = detect_hooks()
-    assert len(hooks) == 0
+    # File-based tools (cline, opencode) are always reported as available
+    tool_names = {h.tool for h in hooks}
+    assert tool_names == {"cline", "opencode"}
+    for h in hooks:
+        assert h.note == "file-based tool (no CLI binary needed)"
+        assert h.binary_path is None
 
 
 def test_known_hook_tools_includes_expected():

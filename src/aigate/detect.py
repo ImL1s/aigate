@@ -22,6 +22,7 @@ class DetectedHook:
     tool: str
     available: bool
     binary_path: str | None
+    note: str | None = None
 
 
 KNOWN_BACKENDS = [
@@ -95,13 +96,27 @@ def detect_backends() -> list[DetectedBackend]:
     return detected
 
 
+# Tools that are file-based (no CLI binary to detect)
+_FILE_BASED_HOOKS = {"cline", "opencode"}
+
+
 def detect_hooks() -> list[DetectedHook]:
     """Detect which AI coding tools are available for hook installation."""
     detected: list[DetectedHook] = []
     for tool in KNOWN_HOOK_TOOLS:
-        path = shutil.which(tool)
-        if path:
-            detected.append(DetectedHook(tool=tool, available=True, binary_path=path))
+        if tool in _FILE_BASED_HOOKS:
+            detected.append(
+                DetectedHook(
+                    tool=tool,
+                    available=True,
+                    binary_path=None,
+                    note="file-based tool (no CLI binary needed)",
+                )
+            )
+        else:
+            path = shutil.which(tool)
+            if path:
+                detected.append(DetectedHook(tool=tool, available=True, binary_path=path))
     return detected
 
 
