@@ -17,7 +17,7 @@ Intercepts `pip install` / `npm install` and uses multiple AI models to detect m
 - **Zero-Day Detection** — Reads code intent via LLMs, not just signature databases
 - **Static Pre-Filter** — Typosquatting, Shannon entropy, dangerous patterns, blocklist (no AI needed for 80%+ of checks)
 - **Version Diff Analysis** — Compares two releases to spot injected malware between versions
-- **Lockfile Scanning** — Batch-scan `requirements.txt`, `uv.lock`, `package-lock.json`, `yarn.lock`, and `pnpm-lock.yaml`
+- **Lockfile Scanning** — Batch-scan `requirements.txt`, `uv.lock`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, and `pubspec.lock`
 - **pip/npm Hooks** — Seamless integration with your package manager
 - **AI Tool Hooks** — Native integration with Claude Code, Gemini CLI, Cursor, and other AI coding tools
 - **GitHub Action** — CI/CD scanning with zero configuration
@@ -215,6 +215,7 @@ blocklist:
 ecosystems:
   - pypi
   - npm
+  - pub
 
 cache_dir: ~/.aigate/cache
 cache_ttl_hours: 168   # 7 days

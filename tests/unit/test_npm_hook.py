@@ -1,13 +1,13 @@
 """Tests for the npm install hook — package spec parsing and command routing."""
 
+from __future__ import annotations
+
 import pytest
 
+from aigate.config import Config
 from aigate.hooks import npm_hook
-from aigate.hooks.npm_hook import (
-    _extract_packages,
-    _install_commands_for,
-    _parse_npm_spec,
-)
+from aigate.hooks.npm_hook import _extract_packages, _install_commands_for, _parse_npm_spec
+from aigate.models import EnrichmentResult, PackageInfo, PrefilterResult, RiskLevel
 
 
 class TestParseNpmSpec:
@@ -166,3 +166,59 @@ def test_npm_wrapper_bypasses_with_no_aigate(monkeypatch):
     npm_hook.npm_wrapper()
 
     assert seen == {"pm": "npm", "args": ["install", "react"]}
+
+
+@pytest.mark.asyncio
+async def test_npm_check_packages_passes_enrichment_into_consensus(monkeypatch):
+    config = Config()
+    config.enrichment.enabled = True
+    package = PackageInfo(name="react", version="18.0.0", ecosystem="npm")
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr("aigate.hooks.npm_hook.Config.load", lambda: config)
+
+    async def fake_resolve_package(_: str, __: str | None, ___: str) -> PackageInfo:
+        return package
+
+    async def fake_download_source(_: PackageInfo) -> dict[str, str]:
+        return {"package.json": '{"name":"react"}'}
+
+    def fake_run_prefilter(
+        _: PackageInfo,
+        __: Config,
+        ___: dict[str, str] | None = None,
+    ) -> PrefilterResult:
+        return PrefilterResult(
+            passed=False,
+            reason="needs review",
+            risk_level=RiskLevel.MEDIUM,
+            risk_signals=["signal"],
+            needs_ai_review=True,
+        )
+
+    async def fake_run_enrichment(_: PackageInfo, __: object) -> EnrichmentResult:
+        return EnrichmentResult(
+            library_description="UI library",
+            sources_queried=["osv"],
+        )
+
+    async def fake_run_consensus(**kwargs: object):
+        seen["external_intelligence"] = kwargs["external_intelligence"]
+        from aigate.models import ConsensusResult, Verdict
+
+        return ConsensusResult(
+            final_verdict=Verdict.SAFE,
+            confidence=0.9,
+            summary="safe",
+        )
+
+    monkeypatch.setattr("aigate.hooks.npm_hook.resolve_package", fake_resolve_package)
+    monkeypatch.setattr("aigate.hooks.npm_hook.download_source", fake_download_source)
+    monkeypatch.setattr("aigate.hooks.npm_hook.run_prefilter", fake_run_prefilter)
+    monkeypatch.setattr("aigate.hooks.npm_hook.run_enrichment", fake_run_enrichment)
+    monkeypatch.setattr("aigate.hooks.npm_hook.run_consensus", fake_run_consensus)
+
+    blocked = await npm_hook._check_packages([("react", None)])
+
+    assert blocked == []
+    assert "External Intelligence" in str(seen["external_intelligence"])

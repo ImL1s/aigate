@@ -1,0 +1,169 @@
+"""Tests for `aigate check` CLI behavior."""
+
+from __future__ import annotations
+
+import json
+
+from click.testing import CliRunner
+
+from aigate.cli import main
+from aigate.config import Config
+from aigate.models import PackageInfo, PrefilterResult, RiskLevel
+
+
+def _package(*, name: str = "demo", version: str = "1.0.0", ecosystem: str = "pypi") -> PackageInfo:
+    return PackageInfo(
+        name=name,
+        version=version,
+        ecosystem=ecosystem,
+        author="Test Author",
+        description="Test package",
+        repository="https://github.com/example/test",
+    )
+
+
+def test_check_skip_ai_medium_exits_needs_review(monkeypatch):
+    package = _package()
+
+    monkeypatch.setattr("aigate.cli.Config.load", lambda: Config())
+
+    async def fake_resolve_package(name: str, version: str | None, ecosystem: str) -> PackageInfo:
+        assert (name, version, ecosystem) == ("demo", None, "pypi")
+        return package
+
+    async def fake_download_source(_: PackageInfo) -> dict[str, str]:
+        return {"setup.py": "print('hi')"}
+
+    def fake_run_prefilter(
+        _: PackageInfo,
+        __: Config,
+        ___: dict[str, str] | None = None,
+    ) -> PrefilterResult:
+        return PrefilterResult(
+            passed=False,
+            reason="needs review",
+            risk_level=RiskLevel.MEDIUM,
+            risk_signals=["signal"],
+            needs_ai_review=True,
+        )
+
+    monkeypatch.setattr("aigate.cli.resolve_package", fake_resolve_package)
+    monkeypatch.setattr("aigate.cli.download_source", fake_download_source)
+    monkeypatch.setattr("aigate.cli.run_prefilter", fake_run_prefilter)
+
+    result = CliRunner().invoke(main, ["check", "demo", "--json", "--skip-ai"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["decision"] == "needs_review"
+    assert payload["exit_code"] == 1
+
+
+def test_check_resolve_error_exits_error_json(monkeypatch):
+    monkeypatch.setattr("aigate.cli.Config.load", lambda: Config())
+
+    async def fake_resolve_package(_: str, __: str | None, ___: str) -> PackageInfo:
+        raise ValueError("resolver exploded")
+
+    monkeypatch.setattr("aigate.cli.resolve_package", fake_resolve_package)
+
+    result = CliRunner().invoke(main, ["check", "demo", "--json"])
+
+    assert result.exit_code == 3
+    payload = json.loads(result.output)
+    assert payload["decision"] == "error"
+    assert payload["exit_code"] == 3
+    assert "resolver exploded" in payload["error"]
+
+
+def test_check_cached_skip_ai_preserves_cached_decision(monkeypatch):
+    package = _package()
+
+    monkeypatch.setattr("aigate.cli.Config.load", lambda: Config())
+
+    async def fake_resolve_package(_: str, __: str | None, ___: str) -> PackageInfo:
+        return package
+
+    monkeypatch.setattr("aigate.cli.resolve_package", fake_resolve_package)
+    monkeypatch.setattr(
+        "aigate.cli.get_cached",
+        lambda *_: {
+            "package": {
+                "name": "demo",
+                "version": "1.0.0",
+                "ecosystem": "pypi",
+                "author": "Test Author",
+                "description": "Test package",
+                "download_count": 0,
+                "publish_date": "",
+                "homepage": "",
+                "repository": "https://github.com/example/test",
+                "has_install_scripts": False,
+                "dependencies": [],
+                "metadata": {},
+            },
+            "prefilter": {
+                "passed": False,
+                "reason": "cached malicious",
+                "risk_signals": ["signal"],
+                "risk_level": "high",
+                "needs_ai_review": True,
+            },
+            "consensus": {
+                "final_verdict": "malicious",
+                "confidence": 0.98,
+                "model_results": [],
+                "has_disagreement": False,
+                "summary": "cached malicious",
+                "risk_signals": ["signal"],
+                "recommendation": "Block install",
+            },
+            "cached": True,
+            "total_latency_ms": 10,
+        },
+    )
+
+    result = CliRunner().invoke(main, ["check", "demo", "--json", "--skip-ai"])
+
+    assert result.exit_code == 2
+    payload = json.loads(result.output)
+    assert payload["decision"] == "malicious"
+    assert payload["exit_code"] == 2
+    assert payload["consensus"]["final_verdict"] == "malicious"
+
+
+def test_check_accepts_pub_ecosystem(monkeypatch):
+    package = _package(name="http", version="1.2.1", ecosystem="pub")
+    seen: dict[str, str] = {}
+
+    monkeypatch.setattr("aigate.cli.Config.load", lambda: Config())
+
+    async def fake_resolve_package(name: str, version: str | None, ecosystem: str) -> PackageInfo:
+        seen["ecosystem"] = ecosystem
+        assert (name, version) == ("http", None)
+        return package
+
+    async def fake_download_source(_: PackageInfo) -> dict[str, str]:
+        return {"lib/http.dart": "void main() {}"}
+
+    def fake_run_prefilter(
+        _: PackageInfo,
+        __: Config,
+        ___: dict[str, str] | None = None,
+    ) -> PrefilterResult:
+        return PrefilterResult(
+            passed=True,
+            reason="clean",
+            risk_level=RiskLevel.NONE,
+        )
+
+    monkeypatch.setattr("aigate.cli.resolve_package", fake_resolve_package)
+    monkeypatch.setattr("aigate.cli.download_source", fake_download_source)
+    monkeypatch.setattr("aigate.cli.run_prefilter", fake_run_prefilter)
+
+    result = CliRunner().invoke(
+        main, ["check", "http", "--ecosystem", "pub", "--json", "--skip-ai"]
+    )
+
+    assert result.exit_code == 0
+    assert seen["ecosystem"] == "pub"

@@ -29,8 +29,8 @@ jobs:
 
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
-| `lockfile` | Yes | — | Path to lockfile (`requirements.txt`, `uv.lock`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`) |
-| `ecosystem` | No | inferred from lockfile | Optional ecosystem override (`pypi`, `npm`) |
+| `lockfile` | Yes | — | Path to lockfile (`requirements.txt`, `uv.lock`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `pubspec.lock`) |
+| `ecosystem` | No | inferred from lockfile | Optional ecosystem override (`pypi`, `npm`, `pub`) |
 | `fail-on` | No | `malicious` | When to fail: `malicious`, `suspicious`, or `any` |
 | `skip-ai` | No | `true` | Skip AI models, run static pre-filter only (recommended for CI) |
 | `python-version` | No | `3.12` | Python version for the runner |

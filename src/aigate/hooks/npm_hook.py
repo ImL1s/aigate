@@ -12,7 +12,8 @@ from rich.console import Console
 
 from ..config import Config
 from ..consensus import run_consensus
-from ..models import AnalysisLevel, AnalysisReport
+from ..enrichment import run_enrichment
+from ..models import AnalysisLevel, AnalysisReport, EnrichmentResult
 from ..policy import PolicyOutcome, decision_from_report
 from ..prefilter import run_prefilter
 from ..reporters.terminal import TerminalReporter
@@ -88,7 +89,14 @@ async def _check_packages(packages: list[tuple[str, str | None]]) -> list[str]:
             source_files = await download_source(package)
             prefilter = run_prefilter(package, config, source_files)
             consensus = None
+            enrichment_result = None
             if prefilter.needs_ai_review:
+                if config.enrichment.enabled:
+                    try:
+                        enrichment_result = await run_enrichment(package, config.enrichment)
+                    except Exception as e:
+                        enrichment_result = EnrichmentResult(errors=[f"enrichment: {e}"])
+
                 source_text = "\n".join(f"### {p}\n```\n{c}\n```" for p, c in source_files.items())
                 consensus = await run_consensus(
                     package=package,
@@ -96,12 +104,16 @@ async def _check_packages(packages: list[tuple[str, str | None]]) -> list[str]:
                     source_code=source_text,
                     config=config,
                     level=AnalysisLevel.L1_QUICK,
+                    external_intelligence=(
+                        enrichment_result.to_prompt_section() if enrichment_result else ""
+                    ),
                 )
 
             report = AnalysisReport(
                 package=package,
                 prefilter=prefilter,
                 consensus=consensus,
+                enrichment=enrichment_result,
             )
             decision = decision_from_report(report)
             if decision.should_block_install:

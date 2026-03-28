@@ -25,6 +25,10 @@ class TestDefault:
         c = Config.default()
         assert "aigate" in c.cache_dir
 
+    def test_default_ecosystems_include_pub(self):
+        c = Config.default()
+        assert "pub" in c.ecosystems
+
 
 class TestParseYaml:
     def test_empty_file(self, tmp_path: Path):
@@ -51,24 +55,14 @@ class TestParseYaml:
 
     def test_custom_thresholds(self, tmp_path: Path):
         f = tmp_path / ".aigate.yml"
-        f.write_text(
-            "thresholds:\n"
-            "  malicious: 0.8\n"
-            "  suspicious: 0.7\n"
-        )
+        f.write_text("thresholds:\n  malicious: 0.8\n  suspicious: 0.7\n")
         c = _parse_config(f)
         assert c.thresholds.malicious == 0.8
         assert c.thresholds.suspicious == 0.7
 
     def test_whitelist_blocklist(self, tmp_path: Path):
         f = tmp_path / ".aigate.yml"
-        f.write_text(
-            "whitelist:\n"
-            "  - requests\n"
-            "  - numpy\n"
-            "blocklist:\n"
-            "  - crossenv\n"
-        )
+        f.write_text("whitelist:\n  - requests\n  - numpy\nblocklist:\n  - crossenv\n")
         c = _parse_config(f)
         assert "requests" in c.whitelist
         assert "crossenv" in c.blocklist
@@ -88,12 +82,7 @@ class TestEnrichmentConfig:
 
     def test_parse_enrichment(self, tmp_path: Path):
         f = tmp_path / ".aigate.yml"
-        f.write_text(
-            "enrichment:\n"
-            "  enabled: true\n"
-            "  osv:\n"
-            "    enabled: true\n"
-        )
+        f.write_text("enrichment:\n  enabled: true\n  osv:\n    enabled: true\n")
         c = _parse_config(f)
         assert c.enrichment.enabled is True
 

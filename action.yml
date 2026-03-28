@@ -8,10 +8,10 @@ branding:
 
 inputs:
   lockfile:
-    description: "Path to lockfile (requirements.txt, uv.lock, package-lock.json, yarn.lock, pnpm-lock.yaml)"
+    description: "Path to lockfile (requirements.txt, uv.lock, package-lock.json, yarn.lock, pnpm-lock.yaml, pubspec.lock)"
     required: true
   ecosystem:
-    description: "Optional package ecosystem override (pypi, npm)"
+    description: "Optional package ecosystem override (pypi, npm, pub)"
     required: false
     default: ""
   fail-on:

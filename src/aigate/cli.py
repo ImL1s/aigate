@@ -14,8 +14,28 @@ from . import __version__
 from .cache import get_cached, set_cached
 from .config import Config
 from .consensus import run_consensus
-from .models import AnalysisLevel, AnalysisReport, PackageInfo, PrefilterResult, RiskLevel, Verdict
-from .policy import PolicyOutcome, aggregate_decisions, decision_from_error, decision_from_report
+from .models import (
+    AnalysisLevel,
+    AnalysisReport,
+    ConsensusResult,
+    EnrichmentResult,
+    KnownVulnerability,
+    ModelResult,
+    PackageInfo,
+    PrefilterResult,
+    ProvenanceInfo,
+    RiskLevel,
+    ScorecardCheck,
+    ScorecardResult,
+    SecurityMention,
+    Verdict,
+)
+from .policy import (
+    PolicyOutcome,
+    aggregate_decisions,
+    decision_from_error,
+    decision_from_report,
+)
 from .prefilter import run_prefilter
 from .reporters.json_reporter import JsonReporter
 from .reporters.terminal import TerminalReporter
@@ -38,7 +58,7 @@ def main():
     "--ecosystem",
     "-e",
     default="pypi",
-    type=click.Choice(["pypi", "npm"]),
+    type=click.Choice(["pypi", "npm", "pub"]),
     help="Package ecosystem",
 )
 @click.option("--json", "use_json", is_flag=True, help="Output as JSON")
@@ -82,8 +102,13 @@ async def _check(
         try:
             package = await resolve_package(package_name, pkg_version, ecosystem)
         except Exception as e:
-            console.print(f"[red]Failed to resolve package: {e}[/red]")
-            sys.exit(1)
+            _emit_error(
+                use_json=use_json,
+                package_name=package_name,
+                package_version=pkg_version or "",
+                ecosystem=ecosystem,
+                message=f"Failed to resolve package: {e}",
+            )
 
     # 1.5 Check cache
     cached = get_cached(
@@ -95,20 +120,10 @@ async def _check(
     )
     if cached and skip_ai:
         total_ms = int((time.monotonic() - start) * 1000)
-        console.print("[dim](cached result)[/dim]")
-        report = AnalysisReport(
-            package=package,
-            prefilter=PrefilterResult(
-                passed=cached.get("prefilter", {}).get("passed", True),
-                reason=cached.get("prefilter", {}).get("reason", "cached"),
-                risk_level=RiskLevel(cached.get("prefilter", {}).get("risk_level", "none")),
-            ),
-            cached=True,
-            total_latency_ms=total_ms,
-        )
-        reporter = JsonReporter() if use_json else TerminalReporter(console)
-        reporter.print_report(report)
-        return
+        if not use_json:
+            console.print("[dim](cached result)[/dim]")
+        report = _report_from_cached(cached, fallback_package=package, total_latency_ms=total_ms)
+        _print_report_and_exit(report, use_json)
 
     # 2. Download source
     with console.status(f"Downloading {package.name}=={package.version}..."):
@@ -130,7 +145,9 @@ async def _check(
             try:
                 enrichment_result = await run_enrichment(package, config.enrichment)
             except Exception as e:
-                console.print(f"[dim]Enrichment failed: {e}[/dim]")
+                if not use_json:
+                    console.print(f"[dim]Enrichment failed: {e}[/dim]")
+                enrichment_result = EnrichmentResult(errors=[f"enrichment: {e}"])
 
     # 4. AI analysis (if needed and not skipped)
     consensus_result = None
@@ -149,11 +166,13 @@ async def _check(
                     ),
                 )
             except Exception as e:
-                console.print(f"[yellow]AI analysis failed: {e}[/yellow]")
+                if not use_json:
+                    console.print(f"[yellow]AI analysis failed: {e}[/yellow]")
     elif not skip_ai and not prefilter_result.passed:
         pass
     elif skip_ai and prefilter_result.risk_signals:
-        console.print("[dim]AI analysis skipped (--skip-ai)[/dim]")
+        if not use_json:
+            console.print("[dim]AI analysis skipped (--skip-ai)[/dim]")
 
     total_ms = int((time.monotonic() - start) * 1000)
 
@@ -168,22 +187,7 @@ async def _check(
     # 5. Cache result
     set_cached(package.name, package.version, ecosystem, report, config.cache_dir)
 
-    # 6. Output
-    reporter = JsonReporter() if use_json else TerminalReporter(console)
-    reporter.print_report(report)
-
-    # Exit code: 0=safe, 1=suspicious/review, 2=malicious, 3=error
-    if consensus_result:
-        exit_codes = {
-            Verdict.SAFE: 0,
-            Verdict.SUSPICIOUS: 1,
-            Verdict.NEEDS_HUMAN_REVIEW: 1,
-            Verdict.MALICIOUS: 2,
-            Verdict.ERROR: 3,
-        }
-        sys.exit(exit_codes.get(consensus_result.final_verdict, 0))
-    elif not prefilter_result.passed:
-        sys.exit(2)
+    _print_report_and_exit(report, use_json)
 
 
 @main.command()
@@ -225,6 +229,7 @@ async def _scan(
                 "malicious": 0,
                 "errors": 0,
             },
+            "decision": "safe",
             "exit_code": 0,
         }
         if use_json:
@@ -276,7 +281,7 @@ async def _scan(
     "--ecosystem",
     "-e",
     default="pypi",
-    type=click.Choice(["pypi", "npm"]),
+    type=click.Choice(["pypi", "npm", "pub"]),
     help="Package ecosystem",
 )
 @click.option("--json", "use_json", is_flag=True, help="Output as JSON")
@@ -317,8 +322,13 @@ async def _diff(
                 download_source(new_pkg),
             )
         except Exception as e:
-            console.print(f"[red]Failed: {e}[/red]")
-            sys.exit(1)
+            _emit_error(
+                use_json=use_json,
+                package_name=package_name,
+                package_version=new_ver,
+                ecosystem=ecosystem,
+                message=f"Failed: {e}",
+            )
 
     # Compute diff: files only in new or changed
     added_files: dict[str, str] = {}
@@ -361,20 +371,7 @@ async def _diff(
         total_latency_ms=total_ms,
     )
 
-    reporter = JsonReporter() if use_json else TerminalReporter(console)
-    reporter.print_report(report)
-
-    if consensus_result:
-        exit_codes = {
-            Verdict.SAFE: 0,
-            Verdict.SUSPICIOUS: 1,
-            Verdict.NEEDS_HUMAN_REVIEW: 1,
-            Verdict.MALICIOUS: 2,
-            Verdict.ERROR: 3,
-        }
-        sys.exit(exit_codes.get(consensus_result.final_verdict, 0))
-    elif not prefilter_result.passed:
-        sys.exit(2)
+    _print_report_and_exit(report, use_json)
 
 
 def _strip_version_prefix(path: str) -> str:
@@ -649,23 +646,22 @@ async def _scan_dependency(
 
                 enrichment_result = await run_enrichment(package, config.enrichment)
             except Exception as e:
-                error = f"Enrichment failed: {e}"
+                enrichment_result = EnrichmentResult(errors=[f"enrichment: {e}"])
 
         source_text = _format_source_for_ai(source_files)
-        if not error:
-            try:
-                consensus = await run_consensus(
-                    package=package,
-                    risk_signals=prefilter.risk_signals,
-                    source_code=source_text,
-                    config=config,
-                    level=AnalysisLevel.L1_QUICK,
-                    external_intelligence=(
-                        enrichment_result.to_prompt_section() if enrichment_result else ""
-                    ),
-                )
-            except Exception as e:
-                error = f"AI analysis failed: {e}"
+        try:
+            consensus = await run_consensus(
+                package=package,
+                risk_signals=prefilter.risk_signals,
+                source_code=source_text,
+                config=config,
+                level=AnalysisLevel.L1_QUICK,
+                external_intelligence=(
+                    enrichment_result.to_prompt_section() if enrichment_result else ""
+                ),
+            )
+        except Exception as e:
+            error = f"AI analysis failed: {e}"
 
     report = AnalysisReport(
         package=package,
@@ -786,6 +782,159 @@ def _parse_yarn_selector_line(line: str) -> list[str]:
         if name:
             names.append(name)
     return names
+
+
+def _emit_error(
+    *,
+    use_json: bool,
+    package_name: str,
+    package_version: str,
+    ecosystem: str,
+    message: str,
+) -> None:
+    if use_json:
+        _print_json(
+            {
+                "package": {
+                    "name": package_name,
+                    "version": package_version,
+                    "ecosystem": ecosystem,
+                },
+                "decision": "error",
+                "exit_code": 3,
+                "should_block_install": False,
+                "error": message,
+            }
+        )
+    else:
+        console.print(f"[red]{message}[/red]")
+    sys.exit(3)
+
+
+def _print_report_and_exit(report: AnalysisReport, use_json: bool) -> None:
+    reporter = JsonReporter() if use_json else TerminalReporter(console)
+    reporter.print_report(report)
+    sys.exit(decision_from_report(report).exit_code)
+
+
+def _report_from_cached(
+    cached: dict,
+    *,
+    fallback_package: PackageInfo,
+    total_latency_ms: int,
+) -> AnalysisReport:
+    package_data = cached.get("package") or {}
+    package = PackageInfo(
+        name=package_data.get("name", fallback_package.name),
+        version=package_data.get("version", fallback_package.version),
+        ecosystem=package_data.get("ecosystem", fallback_package.ecosystem),
+        author=package_data.get("author", fallback_package.author),
+        description=package_data.get("description", fallback_package.description),
+        download_count=package_data.get("download_count", fallback_package.download_count),
+        publish_date=package_data.get("publish_date", fallback_package.publish_date),
+        homepage=package_data.get("homepage", fallback_package.homepage),
+        repository=package_data.get("repository", fallback_package.repository),
+        has_install_scripts=package_data.get(
+            "has_install_scripts",
+            fallback_package.has_install_scripts,
+        ),
+        dependencies=package_data.get("dependencies", fallback_package.dependencies),
+        metadata=package_data.get("metadata", fallback_package.metadata),
+    )
+
+    prefilter_data = cached.get("prefilter") or {}
+    prefilter = PrefilterResult(
+        passed=prefilter_data.get("passed", True),
+        reason=prefilter_data.get("reason", "cached"),
+        risk_signals=prefilter_data.get("risk_signals", []),
+        risk_level=RiskLevel(prefilter_data.get("risk_level", "none")),
+        needs_ai_review=prefilter_data.get("needs_ai_review", False),
+    )
+
+    consensus = None
+    consensus_data = cached.get("consensus")
+    if consensus_data:
+        consensus = ConsensusResult(
+            final_verdict=Verdict(consensus_data.get("final_verdict", "error")),
+            confidence=float(consensus_data.get("confidence", 0.0)),
+            model_results=[
+                ModelResult(
+                    model_name=model.get("model_name", ""),
+                    verdict=Verdict(model.get("verdict", "error")),
+                    confidence=float(model.get("confidence", 0.0)),
+                    reasoning=model.get("reasoning", ""),
+                    risk_signals=model.get("risk_signals", []),
+                    analysis_level=AnalysisLevel(model.get("analysis_level", "l1_quick")),
+                    token_usage=int(model.get("token_usage", 0)),
+                    latency_ms=int(model.get("latency_ms", 0)),
+                    raw_response=model.get("raw_response", ""),
+                )
+                for model in consensus_data.get("model_results", [])
+            ],
+            has_disagreement=consensus_data.get("has_disagreement", False),
+            summary=consensus_data.get("summary", ""),
+            risk_signals=consensus_data.get("risk_signals", []),
+            recommendation=consensus_data.get("recommendation", ""),
+        )
+
+    enrichment = None
+    enrichment_data = cached.get("enrichment")
+    if enrichment_data:
+        scorecard = None
+        if enrichment_data.get("scorecard"):
+            scorecard_data = enrichment_data["scorecard"]
+            scorecard = ScorecardResult(
+                repository_url=scorecard_data.get("repository_url", ""),
+                date=scorecard_data.get("date", ""),
+                score=float(scorecard_data.get("score", 0.0)),
+                critical_findings=scorecard_data.get("critical_findings", []),
+                checks=[
+                    ScorecardCheck(
+                        name=check.get("name", ""),
+                        score=float(check.get("score", 0.0)),
+                        reason=check.get("reason", ""),
+                        documentation_url=check.get("documentation_url", ""),
+                    )
+                    for check in scorecard_data.get("checks", [])
+                ],
+            )
+
+        provenance = None
+        if enrichment_data.get("provenance"):
+            provenance = ProvenanceInfo(**enrichment_data["provenance"])
+
+        enrichment = EnrichmentResult(
+            repository_url=enrichment_data.get("repository_url", ""),
+            project_status=enrichment_data.get("project_status", ""),
+            advisory_ids=enrichment_data.get("advisory_ids", []),
+            library_description=enrichment_data.get("library_description", ""),
+            expected_capabilities=enrichment_data.get("expected_capabilities", []),
+            doc_snippets=enrichment_data.get("doc_snippets", []),
+            security_mentions=[
+                SecurityMention(**mention)
+                for mention in enrichment_data.get("security_mentions", [])
+            ],
+            author_info=enrichment_data.get("author_info", ""),
+            known_vulnerabilities=[
+                KnownVulnerability(**vuln)
+                for vuln in enrichment_data.get("known_vulnerabilities", [])
+            ],
+            scorecard=scorecard,
+            provenance=provenance,
+            sources_queried=enrichment_data.get("sources_queried", []),
+            cache_hit=enrichment_data.get("cache_hit", False),
+            enrichment_latency_ms=int(enrichment_data.get("enrichment_latency_ms", 0)),
+            errors=enrichment_data.get("errors", []),
+        )
+
+    return AnalysisReport(
+        package=package,
+        prefilter=prefilter,
+        consensus=consensus,
+        enrichment=enrichment,
+        cached=True,
+        total_latency_ms=int(cached.get("total_latency_ms", total_latency_ms)),
+    )
 
 
 if __name__ == "__main__":

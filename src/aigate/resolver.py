@@ -13,6 +13,7 @@ from .models import PackageInfo
 
 PYPI_API = "https://pypi.org/pypi"
 NPM_API = "https://registry.npmjs.org"
+PUB_API = "https://pub.dev/api/packages"
 MAX_ARCHIVE_SIZE = 50 * 1024 * 1024  # 50MB — reject larger archives to prevent OOM
 
 
@@ -22,6 +23,8 @@ async def resolve_package(name: str, version: str | None, ecosystem: str) -> Pac
         return await _resolve_pypi(name, version)
     elif ecosystem == "npm":
         return await _resolve_npm(name, version)
+    elif ecosystem == "pub":
+        return await _resolve_pub(name, version)
     else:
         raise ValueError(f"Unsupported ecosystem: {ecosystem}")
 
@@ -81,12 +84,40 @@ async def _resolve_npm(name: str, version: str | None) -> PackageInfo:
     )
 
 
+async def _resolve_pub(name: str, version: str | None) -> PackageInfo:
+    """Resolve from pub.dev API."""
+    url = f"{PUB_API}/{name}" if not version else f"{PUB_API}/{name}/versions/{version}"
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        data = resp.json()
+
+    version_data = data.get("latest", {}) if not version else data
+    pubspec = version_data.get("pubspec", {})
+    latest_version = version or version_data.get("version", pubspec.get("version", ""))
+
+    return PackageInfo(
+        name=name,
+        version=latest_version,
+        ecosystem="pub",
+        author=str(pubspec.get("publisher", "")),
+        description=pubspec.get("description", ""),
+        homepage=pubspec.get("homepage", "") or pubspec.get("repository", ""),
+        repository=pubspec.get("repository", ""),
+        has_install_scripts=False,
+        dependencies=list((pubspec.get("dependencies") or {}).keys()),
+        metadata={"version_data": version_data},
+    )
+
+
 async def download_source(package: PackageInfo, dest: Path | None = None) -> dict[str, str]:
     """Download and extract package source, return {filepath: content} dict."""
     if package.ecosystem == "pypi":
         return await _download_pypi_source(package)
     elif package.ecosystem == "npm":
         return await _download_npm_source(package)
+    elif package.ecosystem == "pub":
+        return await _download_pub_source(package)
     else:
         raise ValueError(f"Unsupported ecosystem: {package.ecosystem}")
 
@@ -143,6 +174,28 @@ async def _download_npm_source(package: PackageInfo) -> dict[str, str]:
     return _extract_archive(content, tarball_url)
 
 
+async def _download_pub_source(package: PackageInfo) -> dict[str, str]:
+    """Download pub.dev tarball and extract text files."""
+    url = f"{PUB_API}/{package.name}/versions/{package.version}"
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        data = resp.json()
+
+    tarball_url = data.get("archive_url")
+    if not tarball_url:
+        return {}
+
+    async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+        resp = await client.get(tarball_url)
+        resp.raise_for_status()
+        content = resp.content
+        if len(content) > MAX_ARCHIVE_SIZE:
+            raise ValueError(f"Archive too large: {len(content)} bytes (max {MAX_ARCHIVE_SIZE})")
+
+    return _extract_archive(content, tarball_url)
+
+
 def _is_path_safe(name: str) -> bool:
     """Reject path traversal and absolute paths."""
     if not name or name.startswith("/") or ".." in name.split("/"):
@@ -154,6 +207,7 @@ def _extract_archive(content: bytes, filename: str) -> dict[str, str]:
     """Extract text files from tar.gz or zip/whl archive."""
     files: dict[str, str] = {}
     text_extensions = {
+        ".dart",
         ".py",
         ".js",
         ".ts",

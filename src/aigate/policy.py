@@ -147,6 +147,15 @@ def decision_from_enrichment(enrichment: EnrichmentResult | None) -> PolicyDecis
             )
         )
 
+    if enrichment.errors:
+        decisions.append(
+            PolicyDecision(
+                outcome=PolicyOutcome.NEEDS_REVIEW,
+                exit_code=1,
+                reason=enrichment.errors[0],
+            )
+        )
+
     if not decisions:
         return None
     return aggregate_decisions(decisions)

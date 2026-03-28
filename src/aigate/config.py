@@ -49,7 +49,7 @@ class Config:
     cache_ttl_hours: int = 168  # 7 days
     max_analysis_level: str = "l2_deep"  # l1_quick, l2_deep, l3_expert
     output_format: str = "rich"  # rich, json, sarif
-    ecosystems: list[str] = field(default_factory=lambda: ["pypi", "npm"])
+    ecosystems: list[str] = field(default_factory=lambda: ["pypi", "npm", "pub"])
     enrichment: EnrichmentConfig = field(default_factory=EnrichmentConfig)
 
     @classmethod
@@ -130,7 +130,7 @@ def _parse_config(path: Path) -> Config:
         cache_ttl_hours=raw.get("cache_ttl_hours", 168),
         max_analysis_level=raw.get("max_analysis_level", "l2_deep"),
         output_format=raw.get("output_format", "rich"),
-        ecosystems=raw.get("ecosystems", ["pypi", "npm"]),
+        ecosystems=raw.get("ecosystems", ["pypi", "npm", "pub"]),
         enrichment=_parse_enrichment(raw.get("enrichment", {})),
     )
 
