@@ -368,3 +368,24 @@ def install_hooks(tools: list[str], project_dir: Path) -> list[str]:
         messages.extend(msgs)
 
     return messages
+
+
+# Tools that are file-based (no CLI binary to detect) — always included in auto mode
+_FILE_BASED_TOOLS = {"cline", "opencode"}
+
+
+def install_hooks_auto(project_dir: Path) -> list[str]:
+    """Auto-detect installed AI tools and install hooks for all found.
+
+    Binary-based tools are detected via ``shutil.which``.  File-based tools
+    (cline, opencode) are always included because they don't require an
+    external binary.
+    """
+    messages: list[str] = []
+    for tool_name, installer_fn in INSTALLERS.items():
+        if tool_name in _FILE_BASED_TOOLS or shutil.which(tool_name):
+            msgs = installer_fn(project_dir)
+            messages.extend(msgs)
+    if not messages:
+        messages.append("No supported AI tools detected. Install one and try again.")
+    return messages

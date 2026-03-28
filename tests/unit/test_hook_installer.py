@@ -12,6 +12,7 @@ from aigate.hook_installer import (
     install_cursor,
     install_gemini,
     install_hooks,
+    install_hooks_auto,
     install_opencode,
     install_windsurf,
 )
@@ -354,3 +355,129 @@ class TestInstallHooksCLI:
         assert result.exit_code == 0
         assert (tmp_path / ".cursor" / "hooks.json").exists()
         assert (tmp_path / ".windsurf" / "hooks.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# install_hooks_auto()
+# ---------------------------------------------------------------------------
+
+
+class TestInstallHooksAuto:
+    def test_detects_installed_tools(self, tmp_path, monkeypatch):
+        """Auto should only install hooks for tools whose binaries are found."""
+        installed = {"claude", "gemini"}
+        monkeypatch.setattr(
+            "aigate.hook_installer.shutil.which",
+            lambda name: f"/usr/bin/{name}" if name in installed else None,
+        )
+        msgs = install_hooks_auto(tmp_path)
+        # Binary-detected tools
+        assert any("claude" in m.lower() for m in msgs)
+        assert any("gemini" in m.lower() for m in msgs)
+        # File-based tools always included
+        assert any("clinerules" in m.lower() for m in msgs)
+        assert any("opencode" in m.lower() for m in msgs)
+        # Binary-based tools NOT installed should be absent
+        assert not any("codex" in m.lower() for m in msgs)
+        assert not any("cursor" in m.lower() for m in msgs)
+        assert not any("windsurf" in m.lower() for m in msgs)
+        assert not any("aider" in m.lower() for m in msgs)
+
+    def test_no_tools_detected(self, tmp_path, monkeypatch):
+        """When no binary tools are found, file-based tools still install."""
+        monkeypatch.setattr(
+            "aigate.hook_installer.shutil.which",
+            lambda _name: None,
+        )
+        msgs = install_hooks_auto(tmp_path)
+        # File-based tools still produce messages
+        assert any("clinerules" in m.lower() for m in msgs)
+        assert any("opencode" in m.lower() for m in msgs)
+        # No "No supported AI tools" since file-based tools produce output
+        assert not any("No supported" in m for m in msgs)
+
+    def test_all_tools_detected(self, tmp_path, monkeypatch):
+        """When all binaries are found, all hooks are installed."""
+        monkeypatch.setattr(
+            "aigate.hook_installer.shutil.which",
+            lambda name: f"/usr/bin/{name}",
+        )
+        msgs = install_hooks_auto(tmp_path)
+        added = [m for m in msgs if "Added" in m]
+        assert len(added) == 8  # All 8 tools
+
+    def test_idempotent(self, tmp_path, monkeypatch):
+        """Running auto twice should skip everything on second run."""
+        monkeypatch.setattr(
+            "aigate.hook_installer.shutil.which",
+            lambda name: f"/usr/bin/{name}",
+        )
+        install_hooks_auto(tmp_path)
+        msgs = install_hooks_auto(tmp_path)
+        skipped = [m for m in msgs if "skip" in m.lower()]
+        assert len(skipped) == 8
+
+
+# ---------------------------------------------------------------------------
+# CLI integration: --auto flag
+# ---------------------------------------------------------------------------
+
+
+class TestInstallHooksAutoCLI:
+    def test_auto_flag_help(self):
+        from click.testing import CliRunner
+
+        from aigate.cli import main
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["install-hooks", "--help"])
+        assert result.exit_code == 0
+        assert "--auto" in result.output
+
+    def test_auto_flag_installs_detected(self, tmp_path, monkeypatch):
+        from click.testing import CliRunner
+
+        from aigate.cli import main
+
+        monkeypatch.setattr(
+            "aigate.hook_installer.shutil.which",
+            lambda name: f"/usr/bin/{name}" if name == "claude" else None,
+        )
+        runner = CliRunner()
+        result = runner.invoke(main, ["install-hooks", "--auto", "--project-dir", str(tmp_path)])
+        assert result.exit_code == 0
+        assert (tmp_path / ".claude" / "settings.json").exists()
+        # File-based tools always included
+        assert (tmp_path / ".clinerules").exists()
+        assert (tmp_path / ".opencode" / "plugins" / "aigate-scanner.mjs").exists()
+
+    def test_no_tool_no_auto_errors(self):
+        """Omitting both --tool and --auto should fail."""
+        from click.testing import CliRunner
+
+        from aigate.cli import main
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["install-hooks"])
+        assert result.exit_code != 0
+
+    def test_auto_with_tool_uses_auto(self, tmp_path, monkeypatch):
+        """When both --auto and --tool are given, --auto takes precedence."""
+        from click.testing import CliRunner
+
+        from aigate.cli import main
+
+        monkeypatch.setattr(
+            "aigate.hook_installer.shutil.which",
+            lambda _name: None,
+        )
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["install-hooks", "--auto", "--tool", "claude", "--project-dir", str(tmp_path)],
+        )
+        assert result.exit_code == 0
+        # --auto takes precedence; claude binary not found, so no claude hook
+        assert not (tmp_path / ".claude" / "settings.json").exists()
+        # But file-based tools still installed
+        assert (tmp_path / ".clinerules").exists()
