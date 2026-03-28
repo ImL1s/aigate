@@ -8,6 +8,7 @@ import statistics
 
 from .backends.base import AIBackend
 from .backends.claude import ClaudeBackend
+from .backends.codex import CodexBackend
 from .backends.gemini import GeminiBackend
 from .backends.ollama import OllamaBackend
 from .config import Config, ModelConfig
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 BACKEND_MAP = {
     "claude": ClaudeBackend,
+    "codex": CodexBackend,
     "gemini": GeminiBackend,
     "ollama": OllamaBackend,
 }

@@ -8,7 +8,7 @@ from .config import Config
 
 logger = logging.getLogger(__name__)
 
-VALID_BACKENDS = {"claude", "gemini", "ollama"}
+VALID_BACKENDS = {"claude", "codex", "gemini", "ollama"}
 VALID_ECOSYSTEMS = {"pypi", "npm", "pub"}
 
 
