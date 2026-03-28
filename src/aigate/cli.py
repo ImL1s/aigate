@@ -160,7 +160,7 @@ async def _check(
             report = _report_from_cached(
                 cached, fallback_package=package, total_latency_ms=total_ms
             )
-            _print_report_and_exit(report, use_json)
+            _print_report_and_exit(report, use_json, use_sarif)
 
         # 2. Download source
         with console.status(f"Downloading {package.name}=={package.version}..."):
@@ -224,7 +224,7 @@ async def _check(
     # 5. Cache result
     set_cached(package.name, package.version, ecosystem, report, config.cache_dir)
 
-    _print_report_and_exit(report, use_json)
+    _print_report_and_exit(report, use_json, use_sarif)
 
 
 @main.command()
@@ -237,18 +237,20 @@ async def _check(
     help="Override package ecosystem",
 )
 @click.option("--json", "use_json", is_flag=True, help="Output as JSON")
+@click.option("--sarif", "use_sarif", is_flag=True, help="Output as SARIF 2.1.0")
 @click.option("--skip-ai", is_flag=True, help="Only run static pre-filter")
-def scan(lockfile: str, ecosystem: str | None, use_json: bool, skip_ai: bool):
+def scan(lockfile: str, ecosystem: str | None, use_json: bool, use_sarif: bool, skip_ai: bool):
     """Scan all dependencies in a lockfile.
 
     Example: aigate scan requirements.txt
     """
-    asyncio.run(_scan(lockfile, use_json, skip_ai, ecosystem))
+    asyncio.run(_scan(lockfile, use_json, use_sarif, skip_ai, ecosystem))
 
 
 async def _scan(
     lockfile: str,
     use_json: bool,
+    use_sarif: bool,
     skip_ai: bool,
     ecosystem_override: str | None = None,
 ):
@@ -276,14 +278,14 @@ async def _scan(
         return
 
     config = Config.load()
-    if not use_json:
+    if not use_json and not use_sarif:
         console.print(f"Scanning {len(packages)} packages from {lockfile} ({ecosystem})...")
 
     results = []
     for name, version in packages:
         result = await _scan_dependency(name, version, ecosystem, config, skip_ai)
         results.append(result)
-        if not use_json:
+        if not use_json and not use_sarif:
             _print_scan_result(result)
 
     decisions = [result["decision"] for result in results]
@@ -298,7 +300,10 @@ async def _scan(
         "exit_code": aggregate.exit_code,
     }
 
-    if use_json:
+    if use_sarif:
+        reports = [result["report"] for result in results]
+        _print_scan_sarif(reports)
+    elif use_json:
         _print_json(payload)
     else:
         console.print(
@@ -322,6 +327,7 @@ async def _scan(
     help="Package ecosystem",
 )
 @click.option("--json", "use_json", is_flag=True, help="Output as JSON")
+@click.option("--sarif", "use_sarif", is_flag=True, help="Output as SARIF 2.1.0")
 @click.option("--skip-ai", is_flag=True, help="Only run static pre-filter")
 def diff(
     package: str,
@@ -329,13 +335,14 @@ def diff(
     new_version: str,
     ecosystem: str,
     use_json: bool,
+    use_sarif: bool,
     skip_ai: bool,
 ):
     """Compare two versions of a package for suspicious changes.
 
     Example: aigate diff litellm 1.82.6 1.82.8
     """
-    asyncio.run(_diff(package, old_version, new_version, ecosystem, use_json, skip_ai))
+    asyncio.run(_diff(package, old_version, new_version, ecosystem, use_json, use_sarif, skip_ai))
 
 
 async def _diff(
@@ -344,6 +351,7 @@ async def _diff(
     new_ver: str,
     ecosystem: str,
     use_json: bool,
+    use_sarif: bool,
     skip_ai: bool,
 ):
     config = Config.load()
@@ -408,7 +416,7 @@ async def _diff(
         total_latency_ms=total_ms,
     )
 
-    _print_report_and_exit(report, use_json)
+    _print_report_and_exit(report, use_json, use_sarif)
 
 
 def _strip_version_prefix(path: str) -> str:
@@ -764,6 +772,68 @@ def _print_json(payload: dict) -> None:
     import json as json_mod
 
     json_mod.dump(payload, sys.stdout, indent=2, default=str)
+    sys.stdout.write("\n")
+
+
+def _print_scan_sarif(reports: list[AnalysisReport]) -> None:
+    """Print a single SARIF document containing results for all scanned packages."""
+    import json as json_mod
+
+    from .reporters.sarif_reporter import SARIF_SCHEMA, VERDICT_TO_LEVEL
+
+    results_list = []
+    for report in reports:
+        decision = decision_from_report(report)
+        verdict = report.consensus.final_verdict if report.consensus else Verdict.SAFE
+        risk_signals = (
+            report.consensus.risk_signals if report.consensus else report.prefilter.risk_signals
+        )
+        results_list.append(
+            {
+                "ruleId": "aigate/supply-chain-risk",
+                "level": VERDICT_TO_LEVEL.get(verdict, "none"),
+                "message": {
+                    "text": (
+                        f"Package {report.package.name}@{report.package.version} "
+                        f"({report.package.ecosystem}): {decision.reason}. "
+                        f"Risk signals: "
+                        f"{', '.join(risk_signals) if risk_signals else 'none'}"
+                    ),
+                },
+                "properties": {
+                    "verdict": str(verdict),
+                    "confidence": (report.consensus.confidence if report.consensus else 0.0),
+                    "ecosystem": report.package.ecosystem,
+                },
+            }
+        )
+
+    sarif = {
+        "$schema": SARIF_SCHEMA,
+        "version": "2.1.0",
+        "runs": [
+            {
+                "tool": {
+                    "driver": {
+                        "name": "aigate",
+                        "version": __version__,
+                        "informationUri": "https://github.com/aetherclouds/aigate",
+                        "rules": [
+                            {
+                                "id": "aigate/supply-chain-risk",
+                                "shortDescription": {
+                                    "text": "AI-powered supply chain risk detection",
+                                },
+                            },
+                        ],
+                    },
+                },
+                "results": results_list,
+            },
+        ],
+    }
+
+    json_mod.dump(sarif, sys.stdout, indent=2)
     sys.stdout.write("\n")
 
 
