@@ -431,11 +431,16 @@ def _strip_version_prefix(path: str) -> str:
     "-t",
     "tools",
     multiple=True,
-    required=True,
     type=click.Choice(
         ["claude", "gemini", "codex", "cursor", "windsurf", "aider", "opencode", "cline", "all"]
     ),
     help="AI tool to install hooks for (repeatable, or 'all')",
+)
+@click.option(
+    "--auto",
+    "auto_detect",
+    is_flag=True,
+    help="Auto-detect installed tools and install hooks for all found.",
 )
 @click.option(
     "--project-dir",
@@ -444,21 +449,29 @@ def _strip_version_prefix(path: str) -> str:
     type=click.Path(exists=True, file_okay=False),
     help="Project directory (default: current directory)",
 )
-def install_hooks(tools: tuple[str, ...], project_dir: str):
+def install_hooks(tools: tuple[str, ...], auto_detect: bool, project_dir: str):
     """Install aigate PreToolUse hooks into AI coding tool configs.
 
     Example: aigate install-hooks --tool claude --tool gemini
+    Example: aigate install-hooks --auto
     """
     from pathlib import Path
 
     from .hook_installer import install_hooks as _install
+    from .hook_installer import install_hooks_auto
+
+    if not tools and not auto_detect:
+        raise click.UsageError("Either --tool or --auto is required.")
 
     target = Path(project_dir).resolve()
-    messages = _install(list(tools), target)
+    if auto_detect:
+        messages = install_hooks_auto(target)
+    else:
+        messages = _install(list(tools), target)
     for msg in messages:
         if msg.startswith("(skip)"):
             console.print(f"[yellow]{msg}[/yellow]")
-        elif msg.startswith("Unknown"):
+        elif msg.startswith("Unknown") or msg.startswith("No supported"):
             console.print(f"[red]{msg}[/red]")
         else:
             console.print(f"[green]{msg}[/green]")
@@ -516,6 +529,53 @@ def init():
         console.print(
             f"\n[dim]Tip: Run 'aigate install-hooks' to set up hooks for: {tool_names}[/dim]"
         )
+
+
+@main.command()
+@click.pass_context
+def doctor(ctx):
+    """Diagnose aigate setup: backends, hooks, config."""
+    from .detect import KNOWN_BACKENDS, detect_backends, detect_hooks
+
+    console.print("\n[bold]aigate doctor[/bold]\n")
+
+    # 1. Backends
+    console.print("[bold]AI Backends:[/bold]")
+    detected = detect_backends()
+    detected_names = {b.name for b in detected}
+    for template in KNOWN_BACKENDS:
+        if template.name in detected_names:
+            console.print(f"  [green]\u2713[/green] {template.name}")
+        else:
+            console.print(f"  [dim]\u2717 {template.name}[/dim]  ({template.install_hint})")
+
+    # 2. Strategy
+    count = len(detected)
+    strategy = {0: "prefilter-only", 1: "single-model", 2: "dual-model"}.get(
+        count, f"full consensus ({count} models)"
+    )
+    console.print(f"\n[bold]Consensus Strategy:[/bold] {strategy}")
+
+    # 3. Config
+    console.print("\n[bold]Config:[/bold]")
+    try:
+        config = Config.load()
+        console.print(
+            f"  [green]\u2713[/green] Loaded .aigate.yml ({len(config.models)} models configured)"
+        )
+    except Exception:
+        console.print("  [yellow]![/yellow] No .aigate.yml found (using defaults)")
+
+    # 4. Hooks
+    console.print("\n[bold]Hook Status:[/bold]")
+    hooks = detect_hooks()
+    if hooks:
+        for h in hooks:
+            console.print(f"  [green]\u2713[/green] {h.tool} detected")
+    else:
+        console.print("  [dim]No AI tools detected for hook installation[/dim]")
+
+    console.print()
 
 
 def _format_source_for_ai(source_files: dict[str, str]) -> str:
