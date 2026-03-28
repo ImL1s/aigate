@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,8 @@ from .enrichment import (
     ScorecardConfig,
     WebSearchConfig,
 )
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_NAME = ".aigate.yml"
 
@@ -77,7 +80,15 @@ class Config:
             path = _find_config()
         if path is None or not path.exists():
             return cls.default()
-        return _parse_config(path)
+        config = _parse_config(path)
+
+        from .config_validator import ConfigValidationError, validate_config
+
+        try:
+            validate_config(config)
+        except ConfigValidationError as e:
+            logger.warning("Config validation: %s", e)
+        return config
 
 
 def _find_config() -> Path | None:
