@@ -28,8 +28,12 @@ from ..models import (
     ScorecardResult,
     SecurityMention,
 )
+from ..rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
+
+# Module-level rate limiter for external API calls (5 calls/second)
+_api_limiter = RateLimiter(max_calls=5, period_seconds=1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -177,9 +181,14 @@ async def run_enrichment(
     sources = [name for name, _ in tasks]
     coros = [coro for _, coro in tasks]
 
+    async def _limited_call(coro: Any) -> Any:
+        """Wrap a coroutine with the module-level rate limiter."""
+        async with _api_limiter:
+            return await coro
+
     try:
         raw_results = await asyncio.wait_for(
-            asyncio.gather(*coros, return_exceptions=True),
+            asyncio.gather(*[_limited_call(c) for c in coros], return_exceptions=True),
             timeout=config.timeout_seconds,
         )
     except TimeoutError:
