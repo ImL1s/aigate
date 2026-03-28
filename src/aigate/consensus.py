@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import statistics
 
 from .backends.base import AIBackend
@@ -18,6 +19,8 @@ from .models import (
     Verdict,
     VersionDiff,
 )
+
+logger = logging.getLogger(__name__)
 
 BACKEND_MAP = {
     "claude": ClaudeBackend,
@@ -59,8 +62,9 @@ async def run_consensus(
     for mc in enabled_models:
         try:
             backends.append((mc, create_backend(mc)))
+            logger.debug("Initialized backend: %s (%s)", mc.name, mc.backend)
         except ValueError:
-            # Skip unavailable backends
+            logger.debug("Skipping unavailable backend: %s", mc.backend)
             pass
 
     if not backends:
@@ -104,10 +108,17 @@ async def run_consensus(
             )
         tasks.append(task)
 
+    logger.debug("Running %d AI models in parallel", len(tasks))
     results: list[ModelResult] = []
     for coro in asyncio.as_completed(tasks):
         try:
             result = await coro
+            logger.debug(
+                "Model %s returned verdict=%s confidence=%.2f",
+                result.model_name,
+                result.verdict.value,
+                result.confidence,
+            )
             results.append(result)
         except Exception as e:
             results.append(

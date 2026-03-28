@@ -46,9 +46,17 @@ console = Console()
 
 @click.group()
 @click.version_option(version=__version__)
-def main():
+@click.option("--verbose", "-V", is_flag=True, help="Enable debug logging.")
+@click.option("--quiet", "-q", is_flag=True, help="Suppress non-error output.")
+@click.pass_context
+def main(ctx, verbose, quiet):
     """aigate — AI multi-model consensus for supply chain security."""
-    pass
+    from .log import setup_logging
+
+    setup_logging(verbose=verbose, quiet=quiet)
+    ctx.ensure_object(dict)
+    ctx.obj["verbose"] = verbose
+    ctx.obj["quiet"] = quiet
 
 
 @main.command()

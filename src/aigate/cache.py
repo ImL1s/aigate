@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import time
 from dataclasses import asdict
 from pathlib import Path
 
 from .models import AnalysisReport
+
+logger = logging.getLogger(__name__)
 
 
 def _cache_dir(config_cache_dir: str) -> Path:
@@ -34,13 +37,16 @@ def get_cached(
     key = _cache_key(name, version, ecosystem)
     path = d / f"{key}.json"
     if not path.exists():
+        logger.debug("Cache miss: %s/%s/%s", ecosystem, name, version)
         return None
     try:
         data = json.loads(path.read_text())
         cached_at = data.get("_cached_at", 0)
         if time.time() - cached_at > ttl_hours * 3600:
+            logger.debug("Cache expired: %s/%s/%s", ecosystem, name, version)
             path.unlink(missing_ok=True)
             return None
+        logger.debug("Cache hit: %s/%s/%s", ecosystem, name, version)
         return data
     except (json.JSONDecodeError, OSError):
         return None

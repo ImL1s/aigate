@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import tarfile
 import zipfile
 from pathlib import Path
@@ -10,6 +11,8 @@ from pathlib import Path
 import httpx
 
 from .models import PackageInfo
+
+logger = logging.getLogger(__name__)
 
 PYPI_API = "https://pypi.org/pypi"
 NPM_API = "https://registry.npmjs.org"
@@ -19,6 +22,7 @@ MAX_ARCHIVE_SIZE = 50 * 1024 * 1024  # 50MB — reject larger archives to preven
 
 async def resolve_package(name: str, version: str | None, ecosystem: str) -> PackageInfo:
     """Resolve package metadata from registry."""
+    logger.debug("Resolving package: %s/%s (ecosystem=%s)", name, version or "latest", ecosystem)
     if ecosystem == "pypi":
         return await _resolve_pypi(name, version)
     elif ecosystem == "npm":
@@ -112,6 +116,9 @@ async def _resolve_pub(name: str, version: str | None) -> PackageInfo:
 
 async def download_source(package: PackageInfo, dest: Path | None = None) -> dict[str, str]:
     """Download and extract package source, return {filepath: content} dict."""
+    logger.debug(
+        "Downloading source: %s==%s (%s)", package.name, package.version, package.ecosystem
+    )
     if package.ecosystem == "pypi":
         return await _download_pypi_source(package)
     elif package.ecosystem == "npm":
