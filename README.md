@@ -1,6 +1,8 @@
 # aigate
 
 [![CI](https://github.com/ImL1s/aigate/actions/workflows/ci.yml/badge.svg)](https://github.com/ImL1s/aigate/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.11+-green.svg)](https://python.org)
 
 > **Warning**
 > This project is in **Alpha** — not production-ready. APIs may change without notice.
@@ -338,6 +340,17 @@ uv venv && uv pip install -e ".[dev]"
 ```
 
 **Adding attack fixtures:** Create a synthetic fixture in `tests/fixtures/fake_malicious_<name>.py` following the existing pattern (document the real attack, recreate only the code patterns, never include real malware). Add corresponding test cases in `tests/unit/test_attack_fixtures.py`.
+
+## Documentation
+
+- [Architecture](docs/architecture.md) — System design, module responsibilities, consensus mechanism
+- [AI Tool Integration](docs/ai-tool-integration.md) — Hook setup for Claude Code, Gemini, Cursor, etc.
+- [Configuration](docs/configuration.md) — Full `.aigate.yml` reference with preset examples
+- [Attack Detection](docs/attack-detection.md) — Supported attacks, test cases, detection layers
+- [GitHub Action](docs/github-action.md) — CI/CD integration
+- [npm Integration](docs/npm-integration.md) — npm/yarn/pnpm hook setup
+- [Security Policy](SECURITY.md) — Vulnerability reporting
+- [Contributing](CONTRIBUTING.md) — How to contribute
 
 ## License
 
