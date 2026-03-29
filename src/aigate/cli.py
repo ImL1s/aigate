@@ -703,6 +703,102 @@ def doctor(ctx):
     console.print()
 
 
+# ---------------------------------------------------------------------------
+# aigate rules — rule management subcommands
+# ---------------------------------------------------------------------------
+
+
+@main.group()
+def rules():
+    """Manage detection rules."""
+
+
+@rules.command("list")
+@click.option("--tag", default=None, help="Filter rules by tag.")
+def rules_list(tag: str | None):
+    """List all loaded detection rules."""
+    from .rules.loader import BUILTIN_DIR
+    from .rules.loader import load_rules as _load_rules
+
+    all_rules = _load_rules(builtin_dir=BUILTIN_DIR)
+
+    if tag:
+        all_rules = [r for r in all_rules if tag in r.tags]
+
+    if not all_rules:
+        console.print("[yellow]No rules found[/yellow]")
+        return
+
+    # Header
+    console.print(f"{'ID':<30} {'Severity':<10} {'Scope':<16} {'Tags':<30} Description")
+    console.print("-" * 110)
+    for r in sorted(all_rules, key=lambda x: x.id):
+        tags_str = ", ".join(r.tags)
+        console.print(f"{r.id:<30} {r.severity:<10} {r.scope:<16} {tags_str:<30} {r.description}")
+
+    console.print(f"\n[dim]{len(all_rules)} rules loaded[/dim]")
+
+
+@rules.command("stats")
+def rules_stats():
+    """Show rule statistics by severity, scope, and tag."""
+    from collections import Counter
+
+    from .rules.loader import BUILTIN_DIR
+    from .rules.loader import load_rules as _load_rules
+
+    all_rules = _load_rules(builtin_dir=BUILTIN_DIR)
+
+    if not all_rules:
+        console.print("[yellow]No rules loaded[/yellow]")
+        return
+
+    console.print(f"[bold]Total rules:[/bold] {len(all_rules)}\n")
+
+    # By severity
+    severity_counts = Counter(r.severity for r in all_rules)
+    console.print("[bold]By severity:[/bold]")
+    for sev in ("critical", "high", "medium", "low"):
+        count = severity_counts.get(sev, 0)
+        if count:
+            console.print(f"  {sev:<10} {count}")
+
+    # By scope
+    scope_counts = Counter(r.scope for r in all_rules)
+    console.print("\n[bold]By scope:[/bold]")
+    for scope, count in scope_counts.most_common():
+        console.print(f"  {scope:<16} {count}")
+
+    # By tag
+    tag_counts: Counter[str] = Counter()
+    for r in all_rules:
+        tag_counts.update(r.tags)
+    console.print("\n[bold]By tag:[/bold]")
+    for t, count in tag_counts.most_common(15):
+        console.print(f"  {t:<24} {count}")
+
+
+@rules.command("update-popular")
+def rules_update_popular():
+    """Fetch and cache popular package lists from PyPI/npm."""
+    import asyncio as _asyncio
+
+    _asyncio.run(_update_popular())
+
+
+async def _update_popular():
+    from .rules.popular_packages import get_popular_packages
+
+    console.print("Fetching popular packages...")
+    for ecosystem in ("pypi", "npm"):
+        try:
+            pkgs = await get_popular_packages(ecosystem)
+            console.print(f"  Updated {ecosystem}: {len(pkgs)} packages cached")
+        except Exception as e:
+            console.print(f"  [red]Failed to update {ecosystem}: {e}[/red]")
+    console.print("[green]Updated popular package cache[/green]")
+
+
 def _format_source_for_ai(source_files: dict[str, str]) -> str:
     """Format source files for AI prompt, prioritizing risky files."""
     priority_patterns = [
