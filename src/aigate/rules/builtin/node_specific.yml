@@ -1,0 +1,32 @@
+rules:
+  - id: child-process
+    pattern: '\bchild_process\b'
+    severity: high
+    scope: any
+    ecosystem: "*"
+    description: "Node.js child_process — shell command execution"
+    tags: [execution, node]
+
+  - id: process-binding
+    pattern: '\bprocess\.binding\s*\('
+    severity: high
+    scope: any
+    ecosystem: "*"
+    description: "Node.js process.binding — low-level API access"
+    tags: [execution, node]
+
+  - id: constructor-constructor
+    pattern: '\.constructor\.constructor\s*\('
+    severity: high
+    scope: any
+    ecosystem: "*"
+    description: "Constructor chain — sandbox escape technique"
+    tags: [execution, node, sandbox_escape]
+
+  - id: new-function
+    pattern: '\bnew\s+Function\s*\('
+    severity: high
+    scope: any
+    ecosystem: "*"
+    description: "Dynamic function creation via new Function()"
+    tags: [execution, node, dynamic]

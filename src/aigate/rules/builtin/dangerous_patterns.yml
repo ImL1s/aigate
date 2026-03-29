@@ -1,0 +1,96 @@
+rules:
+  - id: eval-call
+    pattern: '\beval\s*\('
+    severity: medium
+    scope: any
+    ecosystem: "*"
+    description: "Dynamic code execution via eval()"
+    tags: [execution, dynamic]
+
+  - id: exec-call
+    pattern: '\bexec\s*\('
+    severity: medium
+    scope: any
+    ecosystem: "*"
+    description: "Dynamic code execution via exec()"
+    tags: [execution, dynamic]
+
+  - id: setup-py-exec
+    pattern: '\bexec\s*\('
+    severity: critical
+    scope: install_script
+    ecosystem: "*"
+    description: "exec() in install script — runs at install time"
+    tags: [execution, install-time]
+
+  - id: dunder-import
+    pattern: '\b__import__\s*\('
+    severity: medium
+    scope: any
+    ecosystem: "*"
+    description: "Dynamic import via __import__()"
+    tags: [execution, dynamic]
+
+  - id: subprocess-call
+    pattern: '\bsubprocess\b'
+    severity: medium
+    scope: any
+    ecosystem: "*"
+    description: "Subprocess invocation"
+    tags: [execution, subprocess]
+
+  - id: os-system
+    pattern: '\bos\.system\s*\('
+    severity: high
+    scope: any
+    ecosystem: "*"
+    description: "Shell command execution via os.system()"
+    tags: [execution, shell]
+
+  - id: os-popen
+    pattern: '\bos\.popen\s*\('
+    severity: high
+    scope: any
+    ecosystem: "*"
+    description: "Shell command execution via os.popen()"
+    tags: [execution, shell]
+
+  - id: compile-exec
+    pattern: '\bcompile\s*\(.*exec'
+    severity: high
+    scope: any
+    ecosystem: "*"
+    description: "compile() + exec pattern — staged code execution"
+    tags: [execution, obfuscation]
+
+  - id: importlib-import
+    pattern: '\bimportlib\.import_module\s*\('
+    severity: medium
+    scope: any
+    ecosystem: "*"
+    description: "Dynamic import via importlib.import_module()"
+    tags: [execution, dynamic]
+
+  - id: getattr-os
+    pattern: '\bgetattr\s*\(\s*os\b'
+    severity: high
+    scope: any
+    ecosystem: "*"
+    description: "Dynamic attribute access on os module"
+    tags: [execution, dynamic]
+
+  - id: ctypes-cdll
+    pattern: '\bctypes\.CDLL\b'
+    severity: high
+    scope: any
+    ecosystem: "*"
+    description: "Native code loading via ctypes.CDLL"
+    tags: [execution, native]
+
+  - id: marshal-loads
+    pattern: '\bmarshal\.loads\s*\('
+    severity: high
+    scope: any
+    ecosystem: "*"
+    description: "Deserialization via marshal.loads() — can execute arbitrary code"
+    tags: [execution, deserialization]

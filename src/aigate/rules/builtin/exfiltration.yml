@@ -1,0 +1,56 @@
+rules:
+  - id: requests-get-post
+    pattern: 'requests?\.(get|post|put)\s*\('
+    severity: medium
+    scope: any
+    ecosystem: "*"
+    description: "HTTP request via requests library"
+    tags: [exfiltration, network]
+
+  - id: urllib-urlopen
+    pattern: 'urllib\.request\.urlopen'
+    severity: medium
+    scope: any
+    ecosystem: "*"
+    description: "HTTP request via urllib.urlopen"
+    tags: [exfiltration, network]
+
+  - id: httpx-get-post
+    pattern: 'httpx?\.(get|post)\s*\('
+    severity: medium
+    scope: any
+    ecosystem: "*"
+    description: "HTTP request via httpx"
+    tags: [exfiltration, network]
+
+  - id: socket-connect
+    pattern: '\bsocket\b.*connect'
+    severity: medium
+    scope: any
+    ecosystem: "*"
+    description: "Raw socket connection"
+    tags: [exfiltration, network]
+
+  - id: socket-getaddrinfo
+    pattern: '\bsocket\.getaddrinfo\s*\('
+    severity: medium
+    scope: any
+    ecosystem: "*"
+    description: "DNS lookup via socket.getaddrinfo — potential DNS exfiltration"
+    tags: [exfiltration, dns]
+
+  - id: socket-create-connection
+    pattern: '\bsocket\.create_connection\s*\('
+    severity: medium
+    scope: any
+    ecosystem: "*"
+    description: "Network connection via socket.create_connection"
+    tags: [exfiltration, network]
+
+  - id: dns-resolver
+    pattern: '\bdns\.resolver\b'
+    severity: medium
+    scope: any
+    ecosystem: "*"
+    description: "DNS resolution via dns.resolver — potential DNS exfiltration"
+    tags: [exfiltration, dns]

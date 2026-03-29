@@ -1,0 +1,24 @@
+rules:
+  - id: process-exit
+    pattern: '\bprocess\.exit\s*\('
+    severity: medium
+    scope: any
+    ecosystem: "*"
+    description: "Process termination — protestware / denial of service"
+    tags: [install_hook, termination]
+
+  - id: os-exit
+    pattern: '\bos\._exit\s*\('
+    severity: medium
+    scope: any
+    ecosystem: "*"
+    description: "Immediate process termination via os._exit()"
+    tags: [install_hook, termination]
+
+  - id: os-kill
+    pattern: '\bos\.kill\s*\('
+    severity: medium
+    scope: any
+    ecosystem: "*"
+    description: "Process killing via os.kill()"
+    tags: [install_hook, termination]

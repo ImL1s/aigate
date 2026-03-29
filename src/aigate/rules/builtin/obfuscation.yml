@@ -1,0 +1,16 @@
+rules:
+  - id: base64-decode
+    pattern: 'base64\.b64decode'
+    severity: medium
+    scope: any
+    ecosystem: "*"
+    description: "Base64 decoding — common obfuscation technique"
+    tags: [obfuscation, encoding]
+
+  - id: webbrowser-open
+    pattern: '\bwebbrowser\.open\s*\('
+    severity: low
+    scope: any
+    ecosystem: "*"
+    description: "Browser open — can redirect to phishing or malicious URLs"
+    tags: [obfuscation, browser]
