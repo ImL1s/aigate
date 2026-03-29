@@ -9,6 +9,7 @@ from difflib import SequenceMatcher
 from .config import Config
 from .models import PackageInfo, PrefilterResult, RiskLevel
 from .rules.loader import Rule, load_rules
+from .rules.popular_packages import _read_cache
 
 # Module-level cache: loaded once, reused for all calls.
 _CACHED_RULES: list[Rule] | None = None
@@ -248,17 +249,26 @@ def run_prefilter(
 
 
 def check_typosquatting(name: str, ecosystem: str) -> list[str]:
-    """Check if package name is suspiciously similar to popular packages."""
-    popular_map: dict[str, set[str]] = {
-        "pypi": POPULAR_PYPI,
-        "npm": POPULAR_NPM,
-        "cargo": POPULAR_CARGO,
-        "gem": POPULAR_GEM,
-        "composer": POPULAR_COMPOSER,
-        "go": POPULAR_GO,
-        "nuget": POPULAR_NUGET,
-    }
-    popular = popular_map.get(ecosystem, POPULAR_PYPI)
+    """Check if package name is suspiciously similar to popular packages.
+
+    Uses cached dynamic lists (fetched by ``get_popular_packages``) when
+    available, otherwise falls back to the hardcoded sets above.
+    """
+    # Try dynamic cache first (sync read, no network call)
+    popular = _read_cache(ecosystem)
+
+    if popular is None:
+        # Fallback to hardcoded sets
+        popular_map: dict[str, set[str]] = {
+            "pypi": POPULAR_PYPI,
+            "npm": POPULAR_NPM,
+            "cargo": POPULAR_CARGO,
+            "gem": POPULAR_GEM,
+            "composer": POPULAR_COMPOSER,
+            "go": POPULAR_GO,
+            "nuget": POPULAR_NUGET,
+        }
+        popular = popular_map.get(ecosystem, POPULAR_PYPI)
     # For Go modules, compare only the last path segment (e.g. github.com/gin-gonic/gim → gim)
     compare_name = name.rsplit("/", 1)[-1] if ecosystem == "go" else name
     matches = []
