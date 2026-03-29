@@ -15,14 +15,6 @@ rules:
     description: "Dynamic code execution via exec()"
     tags: [execution, dynamic]
 
-  - id: setup-py-exec
-    pattern: '\bexec\s*\('
-    severity: critical
-    scope: install_script
-    ecosystem: "*"
-    description: "exec() in install script — runs at install time"
-    tags: [execution, install-time]
-
   - id: dunder-import
     pattern: '\b__import__\s*\('
     severity: medium

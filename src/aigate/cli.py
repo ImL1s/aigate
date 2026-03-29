@@ -588,6 +588,17 @@ def init():
             f"\n[dim]Tip: Run 'aigate install-hooks' to set up hooks for: {tool_names}[/dim]"
         )
 
+    # Warm the popular-packages cache so typosquatting detection works immediately
+    import asyncio as _asyncio_init
+
+    from .rules.popular_packages import get_popular_packages as _get_pop
+
+    for _eco in ("pypi", "npm"):
+        try:
+            _asyncio_init.run(_get_pop(_eco))
+        except Exception:
+            pass  # best-effort; hardcoded fallback is fine
+
     # Generate AI tool instruction files
     from .instructions import generate_instruction_files, generate_skill_files
 
@@ -700,6 +711,17 @@ def doctor(ctx):
     else:
         console.print("  [dim]No AI tools detected for hook installation[/dim]")
 
+    # 5. Warm popular-packages cache (best-effort)
+    import asyncio as _asyncio_doc
+
+    from .rules.popular_packages import get_popular_packages as _get_pop_doc
+
+    for _eco in ("pypi", "npm"):
+        try:
+            _asyncio_doc.run(_get_pop_doc(_eco))
+        except Exception:
+            pass
+
     console.print()
 
 
@@ -792,7 +814,7 @@ async def _update_popular():
     console.print("Fetching popular packages...")
     for ecosystem in ("pypi", "npm"):
         try:
-            pkgs = await get_popular_packages(ecosystem)
+            pkgs = await get_popular_packages(ecosystem, force=True)
             console.print(f"  Updated {ecosystem}: {len(pkgs)} packages cached")
         except Exception as e:
             console.print(f"  [red]Failed to update {ecosystem}: {e}[/red]")

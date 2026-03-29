@@ -14,17 +14,37 @@ from .rules.popular_packages import _read_cache
 
 # Module-level cache: loaded once, reused for all calls.
 _CACHED_RULES: list[Rule] | None = None
+_CACHED_RULES_KEY: tuple[str, tuple[str, ...]] | None = None
 
 # Severity ordering for max() comparison
 _SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 _SEVERITY_LABEL = {0: "LOW", 1: "MEDIUM", 2: "HIGH", 3: "CRITICAL"}
 
 
-def _get_rules() -> list[Rule]:
-    """Return cached rules, loading from YAML on first call."""
-    global _CACHED_RULES  # noqa: PLW0603
-    if _CACHED_RULES is None:
-        _CACHED_RULES = load_rules()
+def _get_rules(config: Config | None = None) -> list[Rule]:
+    """Return cached rules, loading from YAML on first call.
+
+    When *config* is provided, ``config.rules_dir`` and ``config.disable_rules``
+    are forwarded to :func:`load_rules`.  The cache is invalidated when these
+    values change.
+    """
+    global _CACHED_RULES, _CACHED_RULES_KEY  # noqa: PLW0603
+
+    rules_dir = config.rules_dir if config else ""
+    disable = tuple(config.disable_rules) if config else ()
+    cache_key = (rules_dir, disable)
+
+    if _CACHED_RULES is not None and _CACHED_RULES_KEY == cache_key:
+        return _CACHED_RULES
+
+    from pathlib import Path
+
+    user_dir = Path(rules_dir).expanduser() if rules_dir else None
+    _CACHED_RULES = load_rules(
+        user_dir=user_dir,
+        disable_rules=list(disable) if disable else None,
+    )
+    _CACHED_RULES_KEY = cache_key
     return _CACHED_RULES
 
 
@@ -221,12 +241,16 @@ def run_prefilter(
 
     # 5. Source code dangerous patterns
     if source_files:
-        code_signals = check_dangerous_patterns(source_files)
+        code_signals = check_dangerous_patterns(
+            source_files,
+            ecosystem=package.ecosystem,
+            config=config,
+        )
         signals.extend(code_signals)
 
     # 6. Compound signal detection (multi-indicator attack chains)
     if source_files:
-        per_file = _build_per_file_signals(source_files, package.ecosystem)
+        per_file = _build_per_file_signals(source_files, package.ecosystem, config=config)
         compound_signals = check_compound_signals(per_file)
         signals.extend(compound_signals)
 
@@ -311,10 +335,11 @@ def check_dangerous_patterns(
     source_files: dict[str, str],
     package_name: str = "",
     ecosystem: str = "*",
+    config: Config | None = None,
 ) -> list[str]:
     """Check source code for dangerous patterns using YAML rules."""
     signals: list[str] = []
-    rules = _get_rules()
+    rules = _get_rules(config)
 
     # Files that run at install/import time — patterns here are HIGH risk
     install_files = {
@@ -326,7 +351,13 @@ def check_dangerous_patterns(
         "prepare.js",
     }
     # Files that are HIGH only at package root (not in subdirs like tests/)
-    root_only_install_files = {"conftest.py", "__main__.py", "Makefile", "CMakeLists.txt"}
+    root_only_install_files = {
+        "conftest.py",
+        "__main__.py",
+        "Makefile",
+        "CMakeLists.txt",
+        "__init__.py",
+    }
     # Skip non-code files — docs, configs, CI pipelines describe usage, not malicious behavior
     skip_extensions = {
         ".md",
@@ -409,13 +440,14 @@ def check_dangerous_patterns(
 def _build_per_file_signals(
     source_files: dict[str, str],
     ecosystem: str = "*",
+    config: Config | None = None,
 ) -> dict[str, list[dict]]:
     """Build per-file signal dicts with rule tags for compound detection.
 
     Returns a mapping of ``filepath`` → list of ``{"rule_id": ..., "tags": [...]}``.
     Only code files are scanned (same skip logic as ``check_dangerous_patterns``).
     """
-    rules = _get_rules()
+    rules = _get_rules(config)
     skip_extensions = {
         ".md",
         ".rst",
@@ -503,7 +535,7 @@ def _calculate_risk_level(signals: Sequence[str]) -> RiskLevel:
     if not signals:
         return RiskLevel.NONE
 
-    high_count = sum(1 for s in signals if "HIGH" in s or "blocklist" in s)
+    high_count = sum(1 for s in signals if "HIGH" in s or "CRITICAL" in s or "blocklist" in s)
 
     # Count unique MEDIUM patterns (extract pattern before 'in source:' / 'in install_script:')
     medium_patterns: set[str] = set()

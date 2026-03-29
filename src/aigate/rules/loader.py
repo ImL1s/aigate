@@ -25,6 +25,7 @@ class Rule:
     ecosystem: str  # "*" or specific like "pypi", "npm"
     description: str
     tags: list[str] = field(default_factory=list)
+    case_sensitive: bool = False
 
 
 def load_rules(
@@ -96,14 +97,17 @@ def _load_file(path: Path, rules_by_id: dict[str, Rule]) -> None:
 
     for entry in data["rules"]:
         try:
+            is_case_sensitive = entry.get("case_sensitive", False)
+            flags = 0 if is_case_sensitive else re.IGNORECASE
             rule = Rule(
                 id=entry["id"],
-                pattern=re.compile(entry["pattern"], re.IGNORECASE),
+                pattern=re.compile(entry["pattern"], flags),
                 severity=entry["severity"],
                 scope=entry["scope"],
                 ecosystem=entry.get("ecosystem", "*"),
                 description=entry.get("description", ""),
                 tags=entry.get("tags", []),
+                case_sensitive=is_case_sensitive,
             )
             rules_by_id[rule.id] = rule
         except (KeyError, re.error) as exc:

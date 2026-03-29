@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import tempfile
 import time
 from pathlib import Path
 
@@ -21,14 +23,19 @@ _PYPI_TOP_URL = "https://hugovk.github.io/top-pypi-packages/top-pypi-packages-30
 _NPM_SEARCH_URL = "https://registry.npmjs.org/-/v1/search"
 
 
-async def get_popular_packages(ecosystem: str) -> set[str]:
+async def get_popular_packages(ecosystem: str, *, force: bool = False) -> set[str]:
     """Get popular package names, from cache or API.
+
+    Args:
+        ecosystem: Package ecosystem (``"pypi"``, ``"npm"``, etc.).
+        force: When *True*, bypass the cache and always fetch from API.
 
     Falls back to hardcoded lists when the API is unreachable.
     """
-    cached = _read_cache(ecosystem)
-    if cached is not None:
-        return cached
+    if not force:
+        cached = _read_cache(ecosystem)
+        if cached is not None:
+            return cached
 
     try:
         if ecosystem == "pypi":
@@ -102,13 +109,16 @@ def _read_cache(ecosystem: str) -> set[str] | None:
         if age_days > CACHE_TTL_DAYS:
             return None
         return set(entry.get("packages", []))
-    except (json.JSONDecodeError, KeyError, TypeError):
+    except (json.JSONDecodeError, KeyError, TypeError, AttributeError, ValueError):
         logger.warning("Corrupt cache file %s, ignoring", CACHE_FILE)
         return None
 
 
 def _write_cache(ecosystem: str, packages: set[str]) -> None:
-    """Write package list to cache file, preserving other ecosystems."""
+    """Write package list to cache file using atomic write.
+
+    Uses tempfile + os.replace to avoid concurrent readers seeing partial JSON.
+    """
     CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
 
     # Load existing cache to preserve other ecosystems
@@ -123,7 +133,26 @@ def _write_cache(ecosystem: str, packages: set[str]) -> None:
         "packages": sorted(packages),
         "updated_at": time.time(),
     }
-    CACHE_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    fd = None
+    tmp_path = None
+    try:
+        fd, tmp_path = tempfile.mkstemp(dir=CACHE_FILE.parent, suffix=".tmp")
+        with os.fdopen(fd, "w") as f:
+            fd = None  # os.fdopen takes ownership
+            json.dump(data, f, indent=2)
+        os.replace(tmp_path, CACHE_FILE)  # Atomic on POSIX
+        tmp_path = None
+    except OSError:
+        pass
+    finally:
+        if fd is not None:
+            os.close(fd)
+        if tmp_path is not None:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
 # ---------------------------------------------------------------------------
