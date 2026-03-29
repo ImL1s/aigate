@@ -1,95 +1,127 @@
-# aigate
+<p align="center">
+  <h1 align="center">aigate</h1>
+  <p align="center">
+    <strong>Stop malicious packages before they execute. AI-powered supply chain security.</strong>
+  </p>
+  <p align="center">
+    <a href="https://github.com/ImL1s/aigate/actions/workflows/ci.yml"><img src="https://github.com/ImL1s/aigate/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+    <a href="https://pypi.org/project/aigate/"><img src="https://img.shields.io/pypi/v/aigate?color=blue" alt="PyPI"></a>
+    <a href="https://pypi.org/project/aigate/"><img src="https://img.shields.io/pypi/pyversions/aigate" alt="Python"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License"></a>
+    <a href="https://github.com/ImL1s/aigate/stargazers"><img src="https://img.shields.io/github/stars/ImL1s/aigate?style=social" alt="Stars"></a>
+  </p>
+</p>
 
-[![CI](https://github.com/ImL1s/aigate/actions/workflows/ci.yml/badge.svg)](https://github.com/ImL1s/aigate/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/Python-3.11+-green.svg)](https://python.org)
-
-> **Warning**
-> This project is in **Alpha** — not production-ready. APIs may change without notice.
-
-AI multi-model consensus engine for software supply chain security.
-
-Intercepts `pip install` / `npm install` and uses multiple AI models to detect malicious packages **before** they run on your machine. A static pre-filter catches typosquatting, obfuscated payloads, and dangerous patterns without any AI calls — only the ~20% of packages that look suspicious are escalated to multi-model consensus.
-
-## Features
-
-- **AI Multi-Model Consensus** — Claude, Gemini, Codex, Ollama, and any OpenAI-compatible API vote independently; weighted confidence scores with automatic disagreement detection
-- **Zero-Day Detection** — Reads code intent via LLMs, not just signature databases
-- **Works With Any Setup** — Auto-detects installed tools; dynamic strategy from prefilter-only (0 models) to full consensus (3+ models)
-- **Static Pre-Filter** — Typosquatting, Shannon entropy, dangerous patterns, blocklist (no AI needed for 80%+ of checks)
-- **Version Diff Analysis** — Compares two releases to spot injected malware between versions
-- **Lockfile Scanning** — Batch-scan `requirements.txt`, `uv.lock`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, and `pubspec.lock`
-- **Offline Analysis** — Scan local source directories with `--local`, no network required
-- **pip/npm Hooks** — Seamless integration with your package manager
-- **8 AI Tool Integrations** — Claude Code, Gemini CLI, Codex CLI, Cursor, Windsurf, Aider, OpenCode, Cline
-- **LLM-Native Instructions** — Auto-generates `CLAUDE.md`, `GEMINI.md`, `AGENTS.md`, `.cursorrules`, etc. so AI tools know to check packages
-- **GitHub Action** — CI/CD scanning with zero configuration
-- **Multiple Output Formats** — Terminal (Rich), JSON, and SARIF 2.1.0 (GitHub Security tab)
-- **Enrichment Pipeline** — Optional OSV, deps.dev, OpenSSF Scorecard, provenance, Context7, and web search signals
-
-## Installation
-
-### From PyPI (recommended)
+---
 
 ```bash
-uv pip install aigate
+pip install aigate && aigate init && aigate check crossenv --skip-ai
+# Exit code 2 — blocked. crossenv is a known typosquat of cross-env.
 ```
 
-### From source
+<!-- TODO: Replace with actual demo GIF recorded via VHS
+<p align="center">
+  <img src="docs/assets/demo.gif" alt="aigate demo" width="700">
+</p>
+-->
 
-```bash
-git clone https://github.com/ImL1s/aigate.git
-cd aigate
-uv venv && uv pip install -e ".[dev]"
-```
+## Why aigate?
+
+Existing tools only catch **known** vulnerabilities. aigate catches **unknown** ones too.
+
+| | aigate | GuardDog | pip-audit | osv-scanner | Socket.dev |
+|--|:------:|:--------:|:---------:|:-----------:|:----------:|
+| Zero-day malware detection | **AI intent analysis** | Semgrep heuristics | -- | -- | Behavior analysis |
+| Known CVE scanning | via OSV enrichment | -- | **Primary focus** | **Primary focus** | Yes |
+| Multi-model consensus | **3+ LLMs vote** | -- | -- | -- | -- |
+| Typosquatting detection | Yes | Yes | -- | -- | Yes |
+| Works without API keys | Yes (prefilter) | Yes | Yes | Yes | Freemium |
+| AI tool integration | **8 tools** | -- | -- | -- | GitHub App |
+| Ecosystems | PyPI, npm, pub | PyPI, npm, Go, Ruby | PyPI | 16+ | npm, PyPI |
+| Self-hostable | **100% open source** | Yes | Yes | Yes | Cloud only |
+
+**aigate reads code intent via LLMs** — a new package that reads `~/.ssh/id_rsa` and POSTs it to a random domain gets caught on day one, even with zero prior reports. Other tools need to wait for someone to report it.
+
+**Defense in depth:** Use aigate for malicious-package detection, pair with `pip-audit`/`osv-scanner` for CVE coverage.
 
 ## Quick Start
 
 ```bash
-# Auto-detect your AI tools and set up everything
+# Install
+pip install aigate
+
+# One command sets up everything: detects your AI tools, generates config + instruction files
 aigate init
 
-# Check what's available on your system
+# Check your setup
 aigate doctor
+```
 
-# Check a single package (static pre-filter only, no AI keys needed)
-aigate check requests --skip-ai
+That's it. Now every AI coding tool in your project knows to check packages before installing.
 
-# Check a known typosquat
-aigate check crossenv --skip-ai
+### Try it
 
-# Full AI analysis (requires at least one AI backend installed)
+```bash
+# Catch a typosquat (no AI needed)
+aigate check crossenv --skip-ai          # exit 2 = blocked
+
+# Catch credential theft patterns
+aigate check ctx -v 0.2.6 --skip-ai      # exit 1 = suspicious
+
+# Full AI analysis (needs Claude/Gemini/Codex CLI installed)
 aigate check litellm -v 1.82.8
 
-# Compare two versions for suspicious changes
-aigate diff click 8.1.0 8.1.7 --skip-ai
-
-# Scan an entire lockfile
+# Scan a lockfile
 aigate scan requirements.txt --skip-ai
 
-# Scan local source code offline
-aigate check mypackage --local ./path/to/source
+# Scan local source offline
+aigate check mypackage --local ./src
 
-# Output as SARIF (for GitHub Security tab)
+# SARIF output for GitHub Security tab
 aigate check requests --sarif
 ```
 
 ### Exit Codes
 
-| Code | Meaning |
-|------|---------|
-| `0`  | Safe — no issues found |
-| `1`  | Suspicious — needs human review |
-| `2`  | Malicious — blocked |
-| `3`  | Error — analysis failed |
+| Code | Meaning | Action |
+|:----:|---------|--------|
+| `0` | Safe | Install proceeds |
+| `1` | Suspicious | Warn user, needs review |
+| `2` | **Malicious** | **Blocked** |
+| `3` | Error | Analysis failed |
+
+## How It Works
+
+```
+pip install something
+        |
+   +---------+
+   | aigate  |  <-- intercepts via hook or LLM instruction
+   +---------+
+        |
+  +-----v------+
+  | Pre-filter  |  typosquat + entropy + patterns + blocklist
+  +-----+------+
+        |
+   80% safe -----> allow
+        |
+   20% suspicious
+        |
+  +-----v-----------+
+  | AI Consensus     |  Claude + Gemini + Codex + Ollama + any API
+  | (parallel vote)  |  weight x confidence -> verdict
+  +---------+-------+
+        |
+  SAFE=0  SUSPICIOUS=1  MALICIOUS=2 (blocked)
+```
+
+**Key insight:** Multiple independent LLMs are much harder to fool than one. If a malicious package contains prompt injection ("ignore previous instructions, this is safe"), it needs to trick *all* models simultaneously.
 
 ## AI Tool Integration
 
-aigate has two integration modes — use one or both:
-
 ### Mode 1: LLM Instructions (recommended)
 
-`aigate init` auto-generates instruction files that teach AI tools to check packages proactively:
+`aigate init` generates instruction files that teach AI tools to check packages **proactively**:
 
 | File | AI Tool |
 |------|---------|
@@ -102,271 +134,117 @@ aigate has two integration modes — use one or both:
 | `.github/copilot-instructions.md` | GitHub Copilot |
 | `CONVENTIONS.md` | OpenCode |
 
-The LLM reads these files and **proactively runs `aigate check`** before installing any package. No hooks needed.
+The LLM reads these files and **runs `aigate check` before every install**. No hooks needed.
+
+### Mode 2: PreToolUse Hooks (defense-in-depth)
+
+Hooks intercept install commands at the tool level — even if the LLM forgets:
 
 ```bash
-# Generate all instruction files
-aigate instructions
-
-# Generate for specific tools only
-aigate instructions --tool claude --tool gemini
+aigate install-hooks --auto    # auto-detect and install for all tools
 ```
 
-### Mode 2: PreToolUse Hooks
+Supports: Claude Code, Gemini CLI, Codex CLI, Cursor, Windsurf, Aider, OpenCode, Cline
 
-For defense-in-depth, hooks intercept `pip install` / `npm install` commands at the tool level:
+### Fail-safe Design
 
-```bash
-# Auto-detect installed tools and install hooks for all of them
-aigate install-hooks --auto
+- **Fail-open** — if aigate crashes or times out, install proceeds
+- **No execution** — aigate reads source text, never runs package code
+- **Bypass** — `pip install foo --no-aigate` skips the check
 
-# Install for a specific tool
-aigate install-hooks --tool claude
-aigate install-hooks --tool gemini
-aigate install-hooks --tool codex
-aigate install-hooks --tool cursor
-aigate install-hooks --tool windsurf
-aigate install-hooks --tool aider
-aigate install-hooks --tool opencode
-aigate install-hooks --tool cline
-```
+## Backends
 
-### Hook Behavior
+aigate auto-detects what you have and adjusts its strategy:
 
-- **Blocks** only packages that normalize to the shared `malicious` decision
-- **Allows** `needs_review` packages by default, but emits that decision in JSON output
-- **Scans** `pip install -r requirements.txt` and bare `npm install` / `yarn install` / `pnpm install` when a lockfile is present
-- **Skips** non-package commands, local path installs like `pip install .`, and system package upgrades (`pip`, `setuptools`, `wheel`)
-- Supports explicit bypass with `--no-aigate`
-- **Fail-open** — if aigate crashes or times out, the install proceeds
-- Supports: `pip`, `pip3`, `python -m pip`, `uv pip`, `npm`, `yarn`, `pnpm`
+| You have | Strategy |
+|----------|----------|
+| Nothing | Prefilter only (static analysis, no AI) |
+| 1 model | Single-model analysis |
+| 2 models | Dual-model consensus |
+| 3+ models | Full weighted voting with disagreement detection |
 
-## GitHub Action
+### Supported Backends
 
-Scan dependencies in CI/CD — no AI keys needed (static pre-filter by default).
+| Backend | Type | Example |
+|---------|------|---------|
+| `claude` | CLI subprocess | Claude Code (`claude -p`) |
+| `gemini` | CLI subprocess | Gemini CLI (`gemini -p`) |
+| `codex` | CLI subprocess | Codex CLI (`codex -q`) |
+| `ollama` | Local HTTP API | Any Ollama model (llama3, deepseek, etc.) |
+| `openai_compat` | HTTP API | **Any** OpenAI-compatible endpoint (OpenRouter, vLLM, llama.cpp) |
 
 ```yaml
-name: Supply Chain Security
-on: [push, pull_request]
-
-jobs:
-  aigate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ImL1s/aigate@main
-        with:
-          lockfile: requirements.txt
-          fail-on: malicious    # malicious | suspicious | any
-          skip-ai: "true"       # static pre-filter only (no API keys needed)
-```
-
-See [docs/github-action.md](docs/github-action.md) for full options and examples.
-
-## Configuration
-
-Run `aigate init` to auto-detect your AI tools and create a `.aigate.yml` in your project root. The config is searched upward from CWD to `~/`.
-
-Use `aigate doctor` to diagnose your setup — see which backends are available, what consensus strategy is active, and which hooks are installed.
-
-```yaml
-# .aigate.yml
+# .aigate.yml — use any combination
 models:
   - name: claude
     backend: claude
     model_id: claude-sonnet-4-6
     weight: 1.0
-    enabled: true
-    timeout_seconds: 120
 
-  - name: gemini
-    backend: gemini
-    model_id: gemini-2.5-pro
-    weight: 0.9
-    enabled: true
-    timeout_seconds: 120
-
-  # Codex CLI:
-  # - name: codex
-  #   backend: codex
-  #   model_id: o3
-  #   weight: 1.0
-
-  # Local analysis (no data sent to cloud):
-  # - name: ollama
-  #   backend: ollama
-  #   model_id: llama3.1:8b
-  #   weight: 0.7
-  #   options:
-  #     base_url: http://localhost:11434
-
-  # Any OpenAI-compatible API (OpenRouter, vLLM, llama.cpp, etc.):
-  # - name: deepseek-local
-  #   backend: openai_compat
-  #   model_id: deepseek-coder-v2
-  #   weight: 0.8
-  #   options:
-  #     base_url: http://localhost:11434/v1
-  #     api_key_env: OPENROUTER_API_KEY  # reads from env var
-
-thresholds:
-  malicious: 0.6       # weighted confidence >= 0.6 → MALICIOUS
-  suspicious: 0.5      # weighted confidence >= 0.5 → SUSPICIOUS
-  disagreement: 0.4    # stddev >= 0.4 → NEEDS_HUMAN_REVIEW
-
-whitelist:
-  - requests
-  - numpy
-
-blocklist:
-  - crossenv
-  - python3-dateutil
-
-ecosystems:
-  - pypi
-  - npm
-  - pub
-
-cache_dir: ~/.aigate/cache
-cache_ttl_hours: 168   # 7 days
-
-enrichment:
-  enabled: true
-  osv:
-    enabled: true
-  deps_dev:
-    enabled: true
-  scorecard:
-    enabled: true
-  provenance:
-    enabled: true
-  context7:
-    enabled: false
-  web_search:
-    enabled: false
+  - name: deepseek-local
+    backend: openai_compat
+    model_id: deepseek-coder-v2
+    options:
+      base_url: http://localhost:11434/v1
 ```
 
-When `--json` is enabled, single-package reports include shared policy fields:
+## GitHub Action
 
-- `decision`: `safe`, `needs_review`, or `malicious`
-- `exit_code`: normalized `0/1/2/3`
-- `should_block_install`: whether wrapper hooks should block locally
-
-## Attack Type Coverage
-
-aigate's pre-filter and AI analysis cover these real-world supply chain attack patterns:
-
-| Attack Type | Example | Pre-filter Detection | AI Detection |
-|---|---|---|---|
-| **Typosquatting** | `crossenv` (npm), `torchtriton` (PyPI) | Name similarity check against top packages | Intent analysis |
-| **Account Hijack** | `ua-parser-js`, `event-stream` | Dangerous patterns in install scripts | Code behavior analysis |
-| **Maintainer Takeover** | `event-stream` / `flatmap-stream` | Obfuscated `eval`/`exec`, hex encoding | Encrypted payload detection |
-| **Domain Expiry Hijack** | `ctx` (PyPI) | `setup.py` exec + credential file access | Exfiltration intent |
-| **Protestware** | `colors.js`, `node-ipc` | Install script anomalies | Sabotage pattern detection |
-| **Credential Theft** | LiteLLM backdoor, W4SP Stealer | `.ssh/`, `.aws/`, `.env`, token patterns | Data flow analysis |
-| **Crypto Mining** | `ua-parser-js` variants | `subprocess`, `exec`, binary downloads | Miner signature detection |
-| **Obfuscated Payloads** | W4SP Stealer | Shannon entropy > 5.5, `base64.b64decode` | Deobfuscation + intent |
-| **Install-time Execution** | `torchtriton`, `ctx` | `setup.py` / `postinstall.js` code patterns | Install hook analysis |
-| **Discord Token Theft** | W4SP Stealer | LevelDB file access, webhook exfiltration | Targeted theft detection |
-
-## Architecture
-
-```
-                    CLI (check / scan / diff)
-                           │
-                    ┌──────▼──────┐
-                    │   Resolver   │  ← Download source archive (tar.gz/zip)
-                    └──────┬──────┘
-                           │
-                    ┌──────▼──────┐
-                    │  Pre-filter  │  ← Typosquat, entropy, patterns, blocklist
-                    └──────┬──────┘
-                           │
-                  ┌────────▼────────┐
-                  │  80% safe → exit │
-                  └────────┬────────┘
-                           │ ~20% suspicious
-                    ┌──────▼──────┐
-                    │ Enrichment  │  ← Context7, OSV, web search (optional)
-                    └──────┬──────┘
-                           │
-              ┌────────────▼────────────┐
-              │    AI Consensus Engine   │
-              │  ┌───────┐ ┌──────────┐ │
-              │  │Claude │ │ Gemini   │ │  ← Parallel analysis
-              │  │Codex  │ │ Ollama   │ │  ← Any combo works
-              │  │OpenAI-compat (any) │ │
-              │  └───┬───┘ └────┬─────┘ │
-              │      │          │        │
-              │  ┌───▼──────────▼───┐    │
-              │  │  Weighted Vote   │    │  ← weight × confidence
-              │  └────────┬────────┘    │
-              │           │             │
-              │  ┌────────▼────────┐    │
-              │  │  Disagreement?  │    │  ← MALICIOUS + SAFE → NEEDS_HUMAN_REVIEW
-              │  └────────┬────────┘    │
-              └───────────┼─────────────┘
-                          │
-                   ┌──────▼──────┐
-                   │  Reporter   │  ← Terminal (Rich) / JSON / SARIF
-                   └─────────────┘
+```yaml
+- uses: ImL1s/aigate@main
+  with:
+    lockfile: requirements.txt
+    fail-on: malicious
+    skip-ai: "true"
 ```
 
-**Key modules:**
+See [docs/github-action.md](docs/github-action.md) for SARIF upload and full options.
 
-| Module | Responsibility |
-|---|---|
-| `cli.py` | Click-based CLI entry point (`check`, `scan`, `diff`, `init`, `doctor`, `instructions`, `install-hooks`) |
-| `resolver.py` | Downloads source archives from PyPI/npm; never executes code |
-| `prefilter.py` | Static checks: typosquat, entropy, dangerous patterns, blocklist |
-| `consensus.py` | Parallel multi-model analysis with weighted voting |
-| `backends/` | Claude (CLI), Gemini (CLI), Codex (CLI), Ollama (HTTP), OpenAI-compat (any API) |
-| `enrichment/` | OSV, deps.dev, Scorecard, provenance, Context7, web search |
-| `reporters/` | Terminal (Rich), JSON, SARIF 2.1.0 output formats |
-| `hooks/` | pip wrapper, npm wrapper for transparent interception |
-| `hook_installer.py` | Auto-install hooks for 8 AI tools |
-| `instructions.py` | Generate LLM instruction files (CLAUDE.md, GEMINI.md, etc.) |
-| `detect.py` | Auto-detect installed AI tools and generate config |
-| `cache.py` | File-based result cache with atomic writes and configurable TTL |
+## Attack Coverage
 
-## CI Layering
+Tested against real-world attack patterns (synthetic reproductions in E2E Docker sandbox):
 
-`aigate` is best used as the malicious-package / install-time behavior gate. For defense in depth, pair it with:
+| Attack | Real Example | Detection |
+|--------|-------------|-----------|
+| Typosquatting | `crossenv` | Name similarity to top packages |
+| Account hijack | `ua-parser-js` | Dangerous patterns in install scripts |
+| Maintainer takeover | `event-stream` | Obfuscated eval/exec |
+| Domain expiry | `ctx` | setup.py credential access |
+| Protestware | `colors.js` | Install script anomalies |
+| Credential theft | LiteLLM, W4SP | .ssh/.aws/.env token patterns |
+| Obfuscated payloads | W4SP Stealer | Shannon entropy + base64 |
+| Discord token theft | W4SP variants | LevelDB + webhook exfiltration |
 
-- `actions/dependency-review-action` for dependency diff gating in PRs
-- `pip-audit` for Python environment CVEs
-- `osv-scanner` for lockfile / SBOM vulnerability coverage
+## Security Model
 
-## Contributing
+aigate uses **4 layers of prompt injection defense**:
 
-Contributions are welcome! Please see the [issues page](https://github.com/ImL1s/aigate/issues) for open tasks.
-
-```bash
-# Development setup
-git clone https://github.com/ImL1s/aigate.git
-cd aigate
-uv venv && uv pip install -e ".[dev]"
-
-# Run tests
-.venv/bin/python -m pytest tests/ -v
-
-# Lint & format
-.venv/bin/ruff check src/ tests/
-.venv/bin/ruff format src/ tests/
-```
-
-**Adding attack fixtures:** Create a synthetic fixture in `tests/fixtures/fake_malicious_<name>.py` following the existing pattern (document the real attack, recreate only the code patterns, never include real malware). Add corresponding test cases in `tests/unit/test_attack_fixtures.py`.
+1. **System/user message separation** — trusted instructions in `system` role, untrusted code in `user` role (API backends)
+2. **Structural tagging** — `<UNTRUSTED_PACKAGE_CODE>` delimiters (CLI backends)
+3. **Multi-model consensus** — tricking 3 independent LLMs simultaneously is exponentially harder
+4. **Output validation** — if a model says "safe" but its reasoning mentions "credential theft", auto-upgrade to suspicious
 
 ## Documentation
 
-- [Architecture](docs/architecture.md) — System design, module responsibilities, consensus mechanism
-- [AI Tool Integration](docs/ai-tool-integration.md) — Hook setup for Claude Code, Gemini, Cursor, etc.
-- [Configuration](docs/configuration.md) — Full `.aigate.yml` reference with preset examples
-- [Attack Detection](docs/attack-detection.md) — Supported attacks, test cases, detection layers
-- [GitHub Action](docs/github-action.md) — CI/CD integration
-- [npm Integration](docs/npm-integration.md) — npm/yarn/pnpm hook setup
-- [Security Policy](SECURITY.md) — Vulnerability reporting
-- [Contributing](CONTRIBUTING.md) — How to contribute
+| Doc | Description |
+|-----|-------------|
+| [Architecture](docs/architecture.md) | System design, modules, consensus mechanism |
+| [AI Tool Integration](docs/ai-tool-integration.md) | All 8 tools, LLM instructions, hooks |
+| [Configuration](docs/configuration.md) | Full `.aigate.yml` reference |
+| [Attack Detection](docs/attack-detection.md) | Supported attacks, E2E testing |
+| [GitHub Action](docs/github-action.md) | CI/CD integration, SARIF output |
+| [npm Integration](docs/npm-integration.md) | npm/yarn/pnpm setup |
+| [Security Policy](SECURITY.md) | Vulnerability reporting |
+| [Contributing](CONTRIBUTING.md) | Dev setup, testing, E2E sandbox |
+
+## Contributing
+
+```bash
+git clone https://github.com/ImL1s/aigate.git && cd aigate
+uv venv && uv pip install -e ".[dev]"
+.venv/bin/python -m pytest tests/ -v     # 404 unit tests + 12 E2E (skipped)
+./scripts/run-e2e.sh                      # full E2E in Docker sandbox
+```
 
 ## License
 
