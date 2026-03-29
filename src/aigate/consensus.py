@@ -113,27 +113,30 @@ async def run_consensus(
         tasks.append(task)
 
     logger.debug("Running %d AI models in parallel", len(tasks))
+    # Q1: Use gather(return_exceptions=True) to preserve model index → name mapping
+    raw_results = await asyncio.gather(*tasks, return_exceptions=True)
     results: list[ModelResult] = []
-    for coro in asyncio.as_completed(tasks):
-        try:
-            result = await coro
-            logger.debug(
-                "Model %s returned verdict=%s confidence=%.2f",
-                result.model_name,
-                result.verdict.value,
-                result.confidence,
-            )
-            results.append(result)
-        except Exception as e:
+    for i, raw in enumerate(raw_results):
+        model_name = backends[i][0].name
+        if isinstance(raw, BaseException):
+            logger.debug("Model %s failed: %s", model_name, raw)
             results.append(
                 ModelResult(
-                    model_name="unknown",
+                    model_name=model_name,
                     verdict=Verdict.ERROR,
                     confidence=0.0,
-                    reasoning=f"Backend error: {e}",
+                    reasoning=f"Backend error: {raw}",
                     analysis_level=level,
                 )
             )
+        else:
+            logger.debug(
+                "Model %s returned verdict=%s confidence=%.2f",
+                raw.model_name,
+                raw.verdict.value,
+                raw.confidence,
+            )
+            results.append(raw)
 
     return _aggregate_votes(results, config, enabled_models)
 

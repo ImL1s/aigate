@@ -1,8 +1,10 @@
 """Tests for consensus engine vote aggregation."""
 
+from unittest.mock import patch
+
 from aigate.config import Config, ModelConfig, ThresholdConfig
-from aigate.consensus import _aggregate_votes
-from aigate.models import AnalysisLevel, ModelResult, Verdict
+from aigate.consensus import _aggregate_votes, run_consensus
+from aigate.models import AnalysisLevel, ModelResult, PackageInfo, Verdict
 
 
 def _result(name: str, verdict: Verdict, confidence: float = 0.9) -> ModelResult:
@@ -134,3 +136,46 @@ class TestAggregateVotes:
         c = _aggregate_votes(results, _config(), _models("claude"))
         assert c.final_verdict == Verdict.ERROR
         assert "errors" in c.summary.lower()
+
+
+# --- Q1: consensus error should preserve correct model_name ---
+class TestConsensusErrorModelName:
+    async def test_backend_error_preserves_model_name(self):
+        """When a backend raises, the error result should have the correct model name."""
+        config = Config(
+            models=[
+                ModelConfig(name="claude", backend="claude", weight=1.0),
+                ModelConfig(name="gemini", backend="gemini", weight=0.9),
+            ],
+        )
+        package = PackageInfo(name="testpkg", version="1.0.0", ecosystem="pypi")
+
+        # Mock create_backend to return backends that fail
+        from aigate.backends.base import AIBackend
+
+        class FailingBackend(AIBackend):
+            name = "failing"
+
+            def __init__(self, backend_name: str):
+                self._name = backend_name
+                self.name = backend_name
+
+            async def analyze(self, prompt, level=AnalysisLevel.L1_QUICK):
+                raise RuntimeError(f"{self._name} exploded")
+
+        with patch("aigate.consensus.create_backend") as mock_create:
+            mock_create.side_effect = lambda mc: FailingBackend(mc.name)
+            result = await run_consensus(
+                package=package,
+                risk_signals=[],
+                source_code="",
+                config=config,
+            )
+
+        # All should be errors — verify model names are NOT "unknown"
+        error_results = [r for r in result.model_results if r.verdict == Verdict.ERROR]
+        assert len(error_results) == 2
+        model_names = {r.model_name for r in error_results}
+        assert "unknown" not in model_names
+        assert "claude" in model_names
+        assert "gemini" in model_names

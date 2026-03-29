@@ -40,6 +40,7 @@ class CodexBackend(AIBackend):
             )
         except TimeoutError:
             proc.kill()
+            await proc.wait()
             raise RuntimeError(f"Codex analysis timed out after {self.timeout}s")
 
         if proc.returncode != 0:

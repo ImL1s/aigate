@@ -131,13 +131,32 @@ def _read_cache(package: PackageInfo, source: str, ttl_hours: int) -> dict[str, 
 
 
 def _write_cache(package: PackageInfo, source: str, data: dict[str, Any]) -> None:
-    """Write to file cache."""
+    """Write to file cache using atomic write (tempfile + os.replace)."""
+    import os
+    import tempfile
+
     data["_cached_at"] = time.time()
-    path = _cache_dir() / f"{_cache_key(package, source)}.json"
+    cache_d = _cache_dir()
+    path = cache_d / f"{_cache_key(package, source)}.json"
+    fd = None
+    tmp_path = None
     try:
-        path.write_text(json.dumps(data, ensure_ascii=False))
+        fd, tmp_path = tempfile.mkstemp(dir=cache_d, suffix=".tmp")
+        with os.fdopen(fd, "w") as f:
+            fd = None  # os.fdopen takes ownership
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp_path, path)  # Atomic on POSIX
+        tmp_path = None
     except OSError as e:
         logger.warning("Failed to write enrichment cache: %s", e)
+    finally:
+        if fd is not None:
+            os.close(fd)
+        if tmp_path is not None:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
 # ---------------------------------------------------------------------------

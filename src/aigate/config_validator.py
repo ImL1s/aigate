@@ -9,7 +9,7 @@ from .config import Config
 logger = logging.getLogger(__name__)
 
 VALID_BACKENDS = {"claude", "codex", "gemini", "ollama", "openai_compat"}
-VALID_ECOSYSTEMS = {"pypi", "npm", "pub"}
+VALID_ECOSYSTEMS = {"pypi", "npm", "pub", "cargo", "gem", "composer", "go", "nuget", "maven"}
 
 
 class ConfigValidationError(ValueError):

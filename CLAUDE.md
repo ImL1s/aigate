@@ -12,7 +12,7 @@ aigate — AI multi-model consensus engine for software supply chain security. I
 # Dev install (use uv, not pip directly — PEP 668)
 uv venv && uv pip install -e ".[dev]"
 
-# Run tests (404 unit tests + 12 E2E, ~17s)
+# Run tests (587 unit tests + 12 E2E, ~41s)
 .venv/bin/python -m pytest tests/ -v
 
 # Lint & format
@@ -57,3 +57,29 @@ Async-first (httpx, asyncio subprocesses). Flow: CLI → Resolver → Pre-filter
 - Pre-filter skips .md/.rst/.txt files to reduce false positives (e.g., `requests.get()` in docs)
 - Entropy check requires line length ≥80 chars
 - Blocklisted packages are blocked immediately without AI analysis
+
+## Package Security (aigate)
+
+Before installing ANY package via pip, npm, yarn, or pnpm, ALWAYS run:
+
+```
+aigate check <package_name>
+```
+
+For npm packages:
+```
+aigate check <package_name> -e npm
+```
+
+**Interpret exit codes:**
+- Exit 0 = safe, proceed with install
+- Exit 1 = suspicious, warn the user before proceeding
+- Exit 2 = malicious, DO NOT install. Inform the user immediately.
+
+**For lockfile scanning:**
+```
+aigate scan requirements.txt
+aigate scan package-lock.json
+```
+
+This is a supply chain security measure. Never skip this step.

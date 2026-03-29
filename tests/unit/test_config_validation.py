@@ -69,3 +69,14 @@ def test_duplicate_model_names_raises():
     )
     with pytest.raises(ConfigValidationError, match="Duplicate"):
         validate_config(config)
+
+
+# --- Q2: VALID_ECOSYSTEMS should include all 9 ecosystems ---
+@pytest.mark.parametrize(
+    "eco",
+    ["pypi", "npm", "pub", "cargo", "gem", "composer", "go", "nuget", "maven"],
+)
+def test_valid_ecosystem_accepted(eco):
+    """All supported ecosystems should pass validation."""
+    config = Config(ecosystems=[eco])
+    validate_config(config)  # Should not raise

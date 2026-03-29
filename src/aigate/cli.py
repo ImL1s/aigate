@@ -8,6 +8,7 @@ import time
 from dataclasses import asdict
 
 import click
+import httpx
 from rich.console import Console
 
 from . import __version__
@@ -60,6 +61,18 @@ def main(ctx, verbose, quiet):
     ctx.obj["quiet"] = quiet
 
 
+def _apply_global_flags(ctx, verbose, quiet):
+    """Apply -V/-q flags that were passed after the subcommand."""
+    from .log import setup_logging
+
+    if verbose and not ctx.obj.get("verbose"):
+        ctx.obj["verbose"] = True
+        setup_logging(verbose=True, quiet=ctx.obj.get("quiet", False))
+    if quiet and not ctx.obj.get("quiet"):
+        ctx.obj["quiet"] = True
+        setup_logging(verbose=ctx.obj.get("verbose", False), quiet=True)
+
+
 @main.command()
 @click.argument("package")
 @click.option("--version", "-v", "pkg_version", default=None, help="Package version")
@@ -87,7 +100,11 @@ def main(ctx, verbose, quiet):
     default=None,
     help="Analyze local source path instead of downloading from registry.",
 )
+@click.option("--verbose", "-V", is_flag=True, help="Enable debug logging.", hidden=True)
+@click.option("--quiet", "-q", is_flag=True, help="Suppress non-error output.", hidden=True)
+@click.pass_context
 def check(
+    ctx,
     package: str,
     pkg_version: str | None,
     ecosystem: str,
@@ -96,11 +113,14 @@ def check(
     level: str,
     skip_ai: bool,
     local_path: str | None,
+    verbose: bool,
+    quiet: bool,
 ):
     """Analyze a single package for security risks.
 
     Example: aigate check litellm -v 1.82.8
     """
+    _apply_global_flags(ctx, verbose, quiet)
     asyncio.run(
         _check(package, pkg_version, ecosystem, use_json, use_sarif, level, skip_ai, local_path)
     )
@@ -136,6 +156,24 @@ async def _check(
         with console.status(f"Resolving {package_name}..."):
             try:
                 package = await resolve_package(package_name, pkg_version, ecosystem)
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 404:
+                    msg = (
+                        f"Package '{package_name}' not found on {ecosystem}. "
+                        "Check the package name and ecosystem are correct."
+                    )
+                else:
+                    msg = (
+                        f"Registry returned HTTP {e.response.status_code} "
+                        f"for '{package_name}' on {ecosystem}."
+                    )
+                _emit_error(
+                    use_json=use_json,
+                    package_name=package_name,
+                    package_version=pkg_version or "",
+                    ecosystem=ecosystem,
+                    message=msg,
+                )
             except Exception as e:
                 _emit_error(
                     use_json=use_json,
@@ -239,11 +277,24 @@ async def _check(
 @click.option("--json", "use_json", is_flag=True, help="Output as JSON")
 @click.option("--sarif", "use_sarif", is_flag=True, help="Output as SARIF 2.1.0")
 @click.option("--skip-ai", is_flag=True, help="Only run static pre-filter")
-def scan(lockfile: str, ecosystem: str | None, use_json: bool, use_sarif: bool, skip_ai: bool):
+@click.option("--verbose", "-V", is_flag=True, help="Enable debug logging.", hidden=True)
+@click.option("--quiet", "-q", is_flag=True, help="Suppress non-error output.", hidden=True)
+@click.pass_context
+def scan(
+    ctx,
+    lockfile: str,
+    ecosystem: str | None,
+    use_json: bool,
+    use_sarif: bool,
+    skip_ai: bool,
+    verbose: bool,
+    quiet: bool,
+):
     """Scan all dependencies in a lockfile.
 
     Example: aigate scan requirements.txt
     """
+    _apply_global_flags(ctx, verbose, quiet)
     asyncio.run(_scan(lockfile, use_json, use_sarif, skip_ai, ecosystem))
 
 
@@ -329,7 +380,11 @@ async def _scan(
 @click.option("--json", "use_json", is_flag=True, help="Output as JSON")
 @click.option("--sarif", "use_sarif", is_flag=True, help="Output as SARIF 2.1.0")
 @click.option("--skip-ai", is_flag=True, help="Only run static pre-filter")
+@click.option("--verbose", "-V", is_flag=True, help="Enable debug logging.", hidden=True)
+@click.option("--quiet", "-q", is_flag=True, help="Suppress non-error output.", hidden=True)
+@click.pass_context
 def diff(
+    ctx,
     package: str,
     old_version: str,
     new_version: str,
@@ -337,11 +392,14 @@ def diff(
     use_json: bool,
     use_sarif: bool,
     skip_ai: bool,
+    verbose: bool,
+    quiet: bool,
 ):
     """Compare two versions of a package for suspicious changes.
 
     Example: aigate diff litellm 1.82.6 1.82.8
     """
+    _apply_global_flags(ctx, verbose, quiet)
     asyncio.run(_diff(package, old_version, new_version, ecosystem, use_json, use_sarif, skip_ai))
 
 

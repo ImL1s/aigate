@@ -36,6 +36,7 @@ class GeminiBackend(AIBackend):
             )
         except TimeoutError:
             proc.kill()
+            await proc.wait()
             raise RuntimeError(f"Gemini analysis timed out after {self.timeout}s")
 
         if proc.returncode != 0:

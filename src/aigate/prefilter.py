@@ -175,10 +175,29 @@ DANGEROUS_PATTERNS: list[re.Pattern] = [
     re.compile(r"\bsocket\b.*connect", re.IGNORECASE),
     re.compile(r"\.ssh/", re.IGNORECASE),
     re.compile(r"\.aws/", re.IGNORECASE),
-    re.compile(r"\.env\b", re.IGNORECASE),
+    # S4: Avoid false positive on process.env — require quote or path separator before .env
+    re.compile(r"""(?<![a-zA-Z0-9_])["'/]\.env\b""", re.IGNORECASE),
     re.compile(r"\.npmrc\b", re.IGNORECASE),
     re.compile(r"\.pypirc\b", re.IGNORECASE),
     re.compile(r"GITHUB_TOKEN|NPM_TOKEN|PYPI_TOKEN|AWS_SECRET", re.IGNORECASE),
+    # S1: ctypes/importlib/getattr/marshal bypass patterns
+    re.compile(r"\bctypes\.CDLL\b", re.IGNORECASE),
+    re.compile(r"\bimportlib\.import_module\s*\(", re.IGNORECASE),
+    re.compile(r"\bgetattr\s*\(\s*os\b", re.IGNORECASE),
+    re.compile(r"\bmarshal\.loads\s*\(", re.IGNORECASE),
+    # S1: Node.js bypass patterns
+    re.compile(r"\bchild_process\b", re.IGNORECASE),
+    re.compile(r"\bprocess\.binding\s*\(", re.IGNORECASE),
+    re.compile(r"\.constructor\.constructor\s*\(", re.IGNORECASE),
+    re.compile(r"\bnew\s+Function\s*\(", re.IGNORECASE),
+    # S5: DNS exfiltration patterns
+    re.compile(r"\bsocket\.getaddrinfo\s*\(", re.IGNORECASE),
+    re.compile(r"\bsocket\.create_connection\s*\(", re.IGNORECASE),
+    re.compile(r"\bdns\.resolver\b", re.IGNORECASE),
+    # S6: Protestware / process termination patterns
+    re.compile(r"\bprocess\.exit\s*\(", re.IGNORECASE),
+    re.compile(r"\bos\._exit\s*\(", re.IGNORECASE),
+    re.compile(r"\bos\.kill\s*\(", re.IGNORECASE),
 ]
 
 # Typosquatting distance threshold
@@ -298,16 +317,35 @@ def check_dangerous_patterns(
 ) -> list[str]:
     """Check source code for dangerous patterns."""
     signals = []
-    install_files = {"setup.py", "setup.cfg", "postinstall.js", "preinstall.js", "install.js"}
+    # S3: expanded install_files set — files that run at install/import time
+    install_files = {
+        "setup.py",
+        "setup.cfg",
+        "postinstall.js",
+        "preinstall.js",
+        "install.js",
+        "prepare.js",
+        "conftest.py",
+        "__main__.py",
+        "Makefile",
+        "CMakeLists.txt",
+    }
     # Skip docs/readme — they describe API usage, not malicious behavior
     skip_extensions = {".md", ".rst", ".txt", ".html", ".css"}
 
     for filepath, content in source_files.items():
         filename = filepath.rsplit("/", 1)[-1] if "/" in filepath else filepath
         suffix = ("." + filename.rsplit(".", 1)[-1]).lower() if "." in filename else ""
-        if suffix in skip_extensions:
+        is_pth = filepath.endswith(".pth")
+        is_install_file = filename in install_files or is_pth
+
+        # S2: .pth files auto-generate HIGH signal regardless of content
+        if is_pth:
+            signals.append(f"dangerous_pattern(HIGH): '.pth file' in install_script:{filepath}")
+
+        # Skip doc files, but never skip install files (e.g. CMakeLists.txt)
+        if suffix in skip_extensions and not is_install_file:
             continue
-        is_install_file = filename in install_files or filepath.endswith(".pth")
 
         for pattern in DANGEROUS_PATTERNS:
             matches = pattern.findall(content)
@@ -368,7 +406,7 @@ def _calculate_risk_level(signals: Sequence[str]) -> RiskLevel:
 
     high_count = sum(1 for s in signals if "HIGH" in s or "blocklist" in s)
 
-    # Count unique MEDIUM patterns (extract pattern string before 'in source:' / 'in install_script:')
+    # Count unique MEDIUM patterns (extract pattern before 'in source:' / 'in install_script:')
     medium_patterns: set[str] = set()
     for s in signals:
         if "MEDIUM" in s or "typosquat" in s:
