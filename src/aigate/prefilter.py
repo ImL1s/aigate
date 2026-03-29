@@ -285,21 +285,22 @@ def check_typosquatting(name: str, ecosystem: str) -> list[str]:
     Uses cached dynamic lists (fetched by ``get_popular_packages``) when
     available, otherwise falls back to the hardcoded sets above.
     """
-    # Try dynamic cache first (sync read, no network call)
-    popular = _read_cache(ecosystem)
+    # Always start with hardcoded sets (guaranteed baseline)
+    popular_map: dict[str, set[str]] = {
+        "pypi": POPULAR_PYPI,
+        "npm": POPULAR_NPM,
+        "cargo": POPULAR_CARGO,
+        "gem": POPULAR_GEM,
+        "composer": POPULAR_COMPOSER,
+        "go": POPULAR_GO,
+        "nuget": POPULAR_NUGET,
+    }
+    popular = set(popular_map.get(ecosystem, POPULAR_PYPI))
 
-    if popular is None:
-        # Fallback to hardcoded sets
-        popular_map: dict[str, set[str]] = {
-            "pypi": POPULAR_PYPI,
-            "npm": POPULAR_NPM,
-            "cargo": POPULAR_CARGO,
-            "gem": POPULAR_GEM,
-            "composer": POPULAR_COMPOSER,
-            "go": POPULAR_GO,
-            "nuget": POPULAR_NUGET,
-        }
-        popular = popular_map.get(ecosystem, POPULAR_PYPI)
+    # Merge with dynamic cache if available (extends, never replaces)
+    cached = _read_cache(ecosystem)
+    if cached:
+        popular |= cached
     # For Go modules, compare only the last path segment (e.g. github.com/gin-gonic/gim → gim)
     compare_name = name.rsplit("/", 1)[-1] if ecosystem == "go" else name
     matches = []
