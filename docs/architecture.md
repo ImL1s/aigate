@@ -65,7 +65,7 @@ User runs: aigate check <package>
 |--------|------|----------------|
 | **CLI** | `cli.py` | Entry point. Commands: `check`, `diff`, `scan`, `init`, `install-hooks`, `instructions`, `doctor` |
 | **Config** | `config.py` | Load `.aigate.yml` from CWD → parents → home. Merge defaults |
-| **Resolver** | `resolver.py` | Fetch package metadata from PyPI/npm/pub.dev. Download + extract source archives (never execute) |
+| **Resolver** | `resolver.py` | Fetch package metadata from PyPI/npm/pub.dev. Download + extract source archives (never execute). Cargo/Gem/Composer/Go/NuGet use prefilter-only path |
 | **Pre-Filter** | `prefilter.py` | Static analysis. Aims to filter 80%+ of safe packages without AI |
 | **Enrichment** | `enrichment/` | Optional intelligence layer. Fetches docs, CVEs, trust signals |
 | **Consensus** | `consensus.py` | Run multiple AI models in parallel. Aggregate weighted votes |
@@ -77,6 +77,7 @@ User runs: aigate check <package>
 | **Hook Installer** | `hook_installer.py` | Install PreToolUse hooks into AI tool configs |
 | **Detect** | `detect.py` | Auto-detect installed AI backends and hook tools |
 | **Instructions** | `instructions.py` | Generate LLM instruction files (CLAUDE.md, GEMINI.md, etc.) |
+| **Agent Scanner** | `agent_scanner.py` | Scan MCP configs, agent skill files, and AI rules files for prompt injection and malicious patterns |
 | **Config Validator** | `config_validator.py` | Validate `.aigate.yml` schema and values |
 | **Rate Limiter** | `rate_limiter.py` | Per-backend rate limiting for API calls |
 | **Log** | `log.py` | Structured logging configuration |

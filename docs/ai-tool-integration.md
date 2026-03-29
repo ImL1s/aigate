@@ -153,14 +153,50 @@ This appends package security rules to `.clinerules`, instructing Cline to run `
 
 ## How It Works
 
-1. AI tool decides to run `pip install some-package`
+1. AI tool decides to run an install command (e.g. `pip install`, `cargo add`, `curl | sh`)
 2. PreToolUse hook fires before execution
-3. Hook script extracts package name from the command
-4. Runs `aigate check <package> --skip-ai` (fast, <2s)
-5. If risk is HIGH/CRITICAL → outputs `{"decision": "block"}` → command blocked
-6. If risk is low → silent pass → command proceeds normally
+3. Hook script parses the command against patterns for all supported ecosystems
+4. For **package installs**: runs `aigate check <package>` (fast, <2s)
+5. For **non-package vectors** (curl|sh, Docker, VSCode): emits a **warn** response
+6. If risk is HIGH/CRITICAL → outputs `{"decision": "block"}` → command blocked
+7. If warn mode → outputs `{"decision": "allow", "warning": "..."}` → user sees warning, command proceeds
+8. If risk is low → silent pass → command proceeds normally
 
 ## What Gets Intercepted
+
+### Package Manager Install Commands
+
+| Ecosystem | Commands | Mode |
+|-----------|----------|------|
+| **PyPI** | `pip install`, `pip3 install`, `uv pip install`, `uv add`, `python -m pip install` | check / scan |
+| **npm** | `npm install`, `npm i`, `yarn add`, `pnpm add`, `pnpm install` | check / scan |
+| **pub.dev (Dart/Flutter)** | `dart pub add`, `dart pub get`, `flutter pub add`, `flutter pub get` | check / scan |
+| **CocoaPods** | `pod install`, `pod update` | scan (Podfile.lock) |
+| **Cargo (Rust)** | `cargo add`, `cargo install` | check (prefilter) |
+| **RubyGems** | `gem install`, `bundle add`, `bundle install` | check (prefilter) |
+| **Composer (PHP)** | `composer require`, `composer install` | check (prefilter) |
+| **Go** | `go get`, `go install` | check (prefilter) |
+| **NuGet (.NET)** | `dotnet add package` | check (prefilter) |
+
+### Non-Package Vectors (warn mode)
+
+These commands are **not blocked** — aigate emits a warning and lets the user decide.
+
+| Vector | Commands | Risk Level |
+|--------|----------|:----------:|
+| **Shell pipe** | `curl ... \| sh`, `wget ... \| bash` | HIGH |
+| **Docker** | `docker pull`, `docker run` (untrusted registries) | MEDIUM |
+| **VSCode extensions** | `code --install-extension` | MEDIUM |
+
+### AI Agent Vectors (warn mode)
+
+| Vector | Detection | Risk Level |
+|--------|-----------|:----------:|
+| **MCP server install** | Scan mcp.json / settings.json for suspicious patterns | HIGH |
+| **Agent skill files** | Scan skill .md files for `curl\|sh`, `exec`, `eval` | HIGH |
+| **Rules file injection** | Scan `.cursorrules`/`.windsurfrules` for prompt injection | HIGH |
+
+### Examples
 
 | Command | Intercepted? |
 |---------|-------------|
@@ -169,10 +205,18 @@ This appends package security rules to `.clinerules`, instructing Cline to run `
 | `npm install express` | Yes |
 | `yarn add react` | Yes |
 | `pnpm add vue` | Yes |
+| `flutter pub add http` | Yes |
+| `cargo add serde` | Yes |
+| `gem install rails` | Yes |
+| `go get github.com/gin-gonic/gin` | Yes |
+| `dotnet add package Newtonsoft.Json` | Yes |
+| `curl https://example.com/install.sh \| sh` | Yes (warn) |
+| `docker run untrusted/image` | Yes (warn) |
 | `pip install -r requirements.txt` | Yes (converted to `aigate scan`) |
 | `pip install .` | No (local install) |
 | `pip install --upgrade pip` | No (system package) |
 | `npm install` | Yes (converted to `aigate scan` if a lockfile is found) |
+| `fvm install 3.29.0` | No (Flutter SDK, safe) |
 
 ## Fail-Open Design
 

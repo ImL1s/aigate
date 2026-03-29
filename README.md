@@ -37,7 +37,7 @@ Existing tools only catch **known** vulnerabilities. aigate catches **unknown** 
 | Typosquatting detection | Yes | Yes | -- | -- | Yes |
 | Works without API keys | Yes (prefilter) | Yes | Yes | Yes | Freemium |
 | AI tool integration | **9 tools** | -- | -- | -- | GitHub App |
-| Ecosystems | PyPI, npm, pub | PyPI, npm, Go, Ruby | PyPI | 16+ | npm, PyPI |
+| Ecosystems | PyPI, npm, pub, Cargo, Gem, Composer, Go, NuGet | PyPI, npm, Go, Ruby | PyPI | 16+ | npm, PyPI |
 | Self-hostable | **100% open source** | Yes | Yes | Yes | Cloud only |
 
 **aigate reads code intent via LLMs** — a new package that reads `~/.ssh/id_rsa` and POSTs it to a random domain gets caught on day one, even with zero prior reports. Other tools need to wait for someone to report it.
@@ -93,7 +93,7 @@ aigate check requests --sarif
 ## How It Works
 
 ```
-pip install something
+pip install / npm install / cargo add / flutter pub add / gem install / ...
         |
    +---------+
    | aigate  |  <-- intercepts via hook or LLM instruction
@@ -214,6 +214,9 @@ Tested against real-world attack patterns (synthetic reproductions in E2E Docker
 | Credential theft | LiteLLM, W4SP | .ssh/.aws/.env token patterns |
 | Obfuscated payloads | W4SP Stealer | Shannon entropy + base64 |
 | Discord token theft | W4SP variants | LevelDB + webhook exfiltration |
+| curl\|sh pipe install | Install scripts | Warn on piping remote scripts to shell |
+| Untrusted Docker images | Typosquatted images | Warn on `docker pull`/`run` from untrusted registries |
+| AI agent vectors | MCP servers, skills, rules | Scan for prompt injection, reverse shells, credential access |
 
 ## Security Model
 
@@ -223,6 +226,15 @@ aigate uses **4 layers of prompt injection defense**:
 2. **Structural tagging** — `<UNTRUSTED_PACKAGE_CODE>` delimiters (CLI backends)
 3. **Multi-model consensus** — tricking 3 independent LLMs simultaneously is exponentially harder
 4. **Output validation** — if a model says "safe" but its reasoning mentions "credential theft", auto-upgrade to suspicious
+
+### Non-Package Threat Detection
+
+Beyond package registries, aigate also warns on:
+
+- **`curl | sh` / `wget | bash`** — piping remote scripts to a shell is flagged as HIGH risk
+- **Untrusted Docker images** — `docker pull`/`run` from non-trusted registries triggers a MEDIUM warning
+- **VSCode extensions** — `code --install-extension` from unknown publishers is flagged
+- **AI agent vectors** — MCP server configs, agent skill files, and `.cursorrules`/`.windsurfrules` are scanned for prompt injection, reverse shells, and credential access patterns (via `agent_scanner.py`)
 
 ## Documentation
 

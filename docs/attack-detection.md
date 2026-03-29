@@ -94,6 +94,59 @@ This script:
 
 E2E tests are **skipped** in normal `pytest` runs. They only execute when `AIGATE_E2E=1` is set (automatically done by docker compose).
 
+## Non-Package Vector Detection
+
+Beyond package registries, aigate detects threats from non-package install vectors. These use **warn mode** — the command is not blocked, but a warning is shown to the user.
+
+### curl|sh Pipe Detection
+
+Remote scripts piped to a shell (`curl ... | sh`, `wget ... | bash`) are flagged as HIGH risk. The hook extracts the URL and emits a warning.
+
+| Pattern | Risk | Action |
+|---------|:----:|--------|
+| `curl <url> \| sh` | HIGH | Warn with URL |
+| `curl <url> \| bash` | HIGH | Warn with URL |
+| `wget <url> \| sh` | HIGH | Warn with URL |
+| `wget -O- <url> \| bash` | HIGH | Warn with URL |
+
+### Untrusted Docker Images
+
+`docker pull` and `docker run` are checked against a trusted registry list (`gcr.io/`, `ghcr.io/`, `docker.io/library/`, `mcr.microsoft.com/`). Images from untrusted sources trigger a MEDIUM warning.
+
+### VSCode Extension Install
+
+`code --install-extension <id>` triggers a MEDIUM warning, alerting the user to verify the extension publisher.
+
+## AI Agent Vector Detection
+
+The `agent_scanner.py` module detects threats specific to AI coding agent workflows. These are particularly dangerous because they can manipulate the AI tool itself.
+
+### MCP Server Config Scanning
+
+When MCP config files (`.claude/settings.json`, `.cursor/mcp.json`, etc.) are modified, aigate scans the new entries for suspicious patterns:
+
+- Reverse shell commands (`nc -e`, `nc -l`)
+- Credential access (`.ssh/`, `.aws/`, `.env`)
+- Shell pipe execution (`curl ... | sh`)
+- Dangerous eval/exec chains
+
+### Agent Skill File Scanning
+
+Skill `.md` files are scanned for embedded shell commands that could be dangerous when executed by an AI agent:
+
+- Code blocks containing `curl|sh`, `eval`, `exec`
+- Reverse shell patterns
+- Credential harvesting commands
+
+### Rules File Injection Scanning
+
+AI rules files (`.cursorrules`, `.windsurfrules`) are scanned for hidden prompt injection:
+
+- "Ignore previous instructions" patterns
+- Hardcoded URLs or endpoints
+- Hidden Unicode characters used to smuggle instructions
+- Directives to bypass security checks
+
 ## Known Limitations
 
 | Limitation | Why | Mitigation |
@@ -102,4 +155,4 @@ E2E tests are **skipped** in normal `pytest` runs. They only execute when `AIGAT
 | Cannot detect runtime-only attacks | Code that downloads payload after install, not during | AI can flag suspicious network setup |
 | Limited to text file analysis | Binary payloads, compiled extensions not scanned | Entropy check on text; future: binary analysis |
 | AI prompt injection | Malicious code can try to manipulate AI verdict | `UNTRUSTED_PACKAGE_CODE` delimiters + multi-model consensus |
-| No Go/Rust support yet | Resolver supports PyPI, npm, and pub.dev (Dart) | Phase 2 roadmap |
+| Newer ecosystems use prefilter only | Cargo, Gem, Composer, Go, NuGet don't have full resolvers yet | Typosquat + blocklist detection; full resolver planned |
