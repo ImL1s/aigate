@@ -3,12 +3,28 @@
 from __future__ import annotations
 
 import math
-import re
 from collections.abc import Sequence
 from difflib import SequenceMatcher
 
 from .config import Config
 from .models import PackageInfo, PrefilterResult, RiskLevel
+from .rules.loader import Rule, load_rules
+
+# Module-level cache: loaded once, reused for all calls.
+_CACHED_RULES: list[Rule] | None = None
+
+# Severity ordering for max() comparison
+_SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+_SEVERITY_LABEL = {0: "LOW", 1: "MEDIUM", 2: "HIGH", 3: "CRITICAL"}
+
+
+def _get_rules() -> list[Rule]:
+    """Return cached rules, loading from YAML on first call."""
+    global _CACHED_RULES  # noqa: PLW0603
+    if _CACHED_RULES is None:
+        _CACHED_RULES = load_rules()
+    return _CACHED_RULES
+
 
 # Top 1000 PyPI packages (abbreviated — expanded at runtime from cache)
 POPULAR_PYPI: set[str] = {
@@ -159,46 +175,9 @@ POPULAR_NUGET: set[str] = {
     "NUnit",
 }
 
-# Known dangerous patterns in install scripts
-DANGEROUS_PATTERNS: list[re.Pattern] = [
-    re.compile(r"\beval\s*\(", re.IGNORECASE),
-    re.compile(r"\bexec\s*\(", re.IGNORECASE),
-    re.compile(r"\b__import__\s*\(", re.IGNORECASE),
-    re.compile(r"\bsubprocess\b", re.IGNORECASE),
-    re.compile(r"\bos\.system\s*\(", re.IGNORECASE),
-    re.compile(r"\bos\.popen\s*\(", re.IGNORECASE),
-    re.compile(r"base64\.b64decode", re.IGNORECASE),
-    re.compile(r"\bcompile\s*\(.*exec", re.IGNORECASE),
-    re.compile(r"requests?\.(get|post|put)\s*\(", re.IGNORECASE),
-    re.compile(r"urllib\.request\.urlopen", re.IGNORECASE),
-    re.compile(r"httpx?\.(get|post)\s*\(", re.IGNORECASE),
-    re.compile(r"\bsocket\b.*connect", re.IGNORECASE),
-    re.compile(r"\.ssh/", re.IGNORECASE),
-    re.compile(r"\.aws/", re.IGNORECASE),
-    # S4: Avoid false positive on process.env — require quote or path separator before .env
-    re.compile(r"""(?<![a-zA-Z0-9_])["'/]\.env\b""", re.IGNORECASE),
-    re.compile(r"\.npmrc\b", re.IGNORECASE),
-    re.compile(r"\.pypirc\b", re.IGNORECASE),
-    re.compile(r"GITHUB_TOKEN|NPM_TOKEN|PYPI_TOKEN|AWS_SECRET", re.IGNORECASE),
-    # S1: ctypes/importlib/getattr/marshal bypass patterns
-    re.compile(r"\bctypes\.CDLL\b", re.IGNORECASE),
-    re.compile(r"\bimportlib\.import_module\s*\(", re.IGNORECASE),
-    re.compile(r"\bgetattr\s*\(\s*os\b", re.IGNORECASE),
-    re.compile(r"\bmarshal\.loads\s*\(", re.IGNORECASE),
-    # S1: Node.js bypass patterns
-    re.compile(r"\bchild_process\b", re.IGNORECASE),
-    re.compile(r"\bprocess\.binding\s*\(", re.IGNORECASE),
-    re.compile(r"\.constructor\.constructor\s*\(", re.IGNORECASE),
-    re.compile(r"\bnew\s+Function\s*\(", re.IGNORECASE),
-    # S5: DNS exfiltration patterns
-    re.compile(r"\bsocket\.getaddrinfo\s*\(", re.IGNORECASE),
-    re.compile(r"\bsocket\.create_connection\s*\(", re.IGNORECASE),
-    re.compile(r"\bdns\.resolver\b", re.IGNORECASE),
-    # S6: Protestware / process termination patterns
-    re.compile(r"\bprocess\.exit\s*\(", re.IGNORECASE),
-    re.compile(r"\bos\._exit\s*\(", re.IGNORECASE),
-    re.compile(r"\bos\.kill\s*\(", re.IGNORECASE),
-]
+
+# Note: Dangerous patterns are now loaded from YAML rules via _get_rules().
+# See src/aigate/rules/builtin/ for the rule definitions.
 
 # Typosquatting distance threshold
 TYPO_SIMILARITY_THRESHOLD = 0.85
@@ -314,9 +293,12 @@ def check_metadata_anomalies(package: PackageInfo) -> list[str]:
 def check_dangerous_patterns(
     source_files: dict[str, str],
     package_name: str = "",
+    ecosystem: str = "*",
 ) -> list[str]:
-    """Check source code for dangerous patterns."""
-    signals = []
+    """Check source code for dangerous patterns using YAML rules."""
+    signals: list[str] = []
+    rules = _get_rules()
+
     # Files that run at install/import time — patterns here are HIGH risk
     install_files = {
         "setup.py",
@@ -375,18 +357,33 @@ def check_dangerous_patterns(
         if suffix in skip_extensions and not is_install_file:
             continue
 
-        for pattern in DANGEROUS_PATTERNS:
-            matches = pattern.findall(content)
-            if matches:
+        for rule in rules:
+            # Ecosystem filter: rule applies if ecosystem is "*" or matches
+            if rule.ecosystem != "*" and rule.ecosystem != ecosystem:
+                continue
+
+            # Scope filter: install_script rules only apply to install files,
+            # source rules only apply to non-install files, any applies to both
+            if rule.scope == "install_script" and not is_install_file:
+                continue
+            if rule.scope == "source" and is_install_file:
+                continue
+
+            if rule.pattern.search(content):
                 label = "install_script" if is_install_file else "source"
                 # Install scripts (setup.py, postinstall.js) are HIGH risk —
                 # code there runs automatically at install time.
                 # Regular source files are LOW — patterns like requests.get()
                 # or subprocess are normal library code, not attack indicators.
-                # Only escalate to AI review based on install script findings.
-                risk = "HIGH" if is_install_file else "LOW"
+                if is_install_file:
+                    # Use at least HIGH for install scripts
+                    sev_ord = max(_SEVERITY_ORDER.get(rule.severity, 0), _SEVERITY_ORDER["high"])
+                else:
+                    # Regular source: always LOW
+                    sev_ord = _SEVERITY_ORDER["low"]
+                risk = _SEVERITY_LABEL[sev_ord]
                 signals.append(
-                    f"dangerous_pattern({risk}): '{pattern.pattern}' in {label}:{filepath}"
+                    f"dangerous_pattern({risk}): '{rule.pattern.pattern}' in {label}:{filepath}"
                 )
 
     return signals
