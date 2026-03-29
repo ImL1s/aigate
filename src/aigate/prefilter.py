@@ -353,19 +353,39 @@ def _shannon_entropy(text: str) -> float:
 
 
 def _calculate_risk_level(signals: Sequence[str]) -> RiskLevel:
-    """Calculate overall risk level from signals."""
+    """Calculate overall risk level from signals.
+
+    Uses unique pattern counts to avoid inflation from the same pattern
+    appearing in multiple files (e.g., requests.get() in source + tests).
+    """
     if not signals:
         return RiskLevel.NONE
 
     high_count = sum(1 for s in signals if "HIGH" in s or "blocklist" in s)
-    medium_count = sum(1 for s in signals if "MEDIUM" in s or "typosquat" in s)
+
+    # Count unique MEDIUM patterns (extract pattern string before 'in source:' / 'in install_script:')
+    medium_patterns: set[str] = set()
+    for s in signals:
+        if "MEDIUM" in s or "typosquat" in s:
+            # Extract pattern key: "dangerous_pattern(MEDIUM): 'pattern' in source:file"
+            # → key is "pattern" (deduplicate across files)
+            if "dangerous_pattern" in s and "'" in s:
+                key = s.split("'")[1] if "'" in s else s
+            else:
+                key = s
+            medium_patterns.add(key)
+    medium_count = len(medium_patterns)
 
     if high_count >= 2:
         return RiskLevel.CRITICAL
     if high_count >= 1:
         return RiskLevel.HIGH
-    if medium_count >= 2 or len(signals) >= 4:
+    # Use unique pattern count + non-pattern signals (typosquat, metadata)
+    non_pattern_count = sum(1 for s in signals if "dangerous_pattern" not in s and "HIGH" not in s)
+    unique_total = medium_count + non_pattern_count
+
+    if medium_count >= 3 or unique_total >= 5:
         return RiskLevel.HIGH
-    if medium_count >= 1 or len(signals) >= 2:
+    if medium_count >= 1 or unique_total >= 2:
         return RiskLevel.MEDIUM
     return RiskLevel.LOW
