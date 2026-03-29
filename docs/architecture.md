@@ -62,7 +62,7 @@ User runs: aigate check <package>
 
 | Module | File | Responsibility |
 |--------|------|----------------|
-| **CLI** | `cli.py` | Entry point. Commands: `check`, `diff`, `scan`, `init`, `install-hooks` |
+| **CLI** | `cli.py` | Entry point. Commands: `check`, `diff`, `scan`, `init`, `install-hooks`, `instructions`, `doctor` |
 | **Config** | `config.py` | Load `.aigate.yml` from CWD → parents → home. Merge defaults |
 | **Resolver** | `resolver.py` | Fetch package metadata from PyPI/npm. Download + extract source archives (never execute) |
 | **Pre-Filter** | `prefilter.py` | Static analysis. Aims to filter 80%+ of safe packages without AI |
@@ -107,13 +107,16 @@ Package source code
 
 **System/user message separation:** API-based backends (Ollama, OpenAI-compat) send structured `system` + `user` message pairs via the chat completions API. CLI-based backends (Claude, Gemini, Codex) concatenate into a single prompt.
 
-**Voting thresholds (configurable):**
+**Voting thresholds (configurable in `.aigate.yml`):**
 
-| Mode | MALICIOUS threshold | SUSPICIOUS threshold |
-|------|--------------------|--------------------|
-| Strict | Any model ≥ 0.8 | Any model ≥ 0.5 |
-| Balanced (default) | Majority ≥ 0.7 | Majority ≥ 0.5 |
-| Permissive | All models ≥ 0.8 | Majority ≥ 0.7 |
+Consensus uses a weighted average: each model's weight is multiplied by its confidence, scores are normalized across verdicts, then compared against flat thresholds:
+
+| Threshold | Default | Meaning |
+|-----------|---------|---------|
+| `thresholds.malicious` | 0.6 | Weighted MALICIOUS score above this → **MALICIOUS** verdict |
+| `thresholds.suspicious` | 0.5 | Weighted SUSPICIOUS score above this → **SUSPICIOUS** verdict |
+
+If any MALICIOUS and SAFE verdicts coexist among models, the result is **NEEDS_HUMAN_REVIEW** regardless of scores. When only one model returns a valid result, the single-model fast path is used — no voting needed.
 
 ## Analysis Levels
 

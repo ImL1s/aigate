@@ -139,29 +139,19 @@ aigate can output results in [SARIF](https://sarifweb.azurewebsites.net/) format
 aigate scan requirements.txt --sarif > results.sarif
 ```
 
-### Action Configuration
+### In CI (via CLI)
+
+SARIF output is available via the `--sarif` CLI flag. The GitHub Action does not currently have a `format` input — use the CLI directly in a workflow step:
 
 ```yaml
-- uses: ImL1s/aigate@main
-  with:
-    lockfile: requirements.txt
-    format: sarif
-```
-
-### Upload to GitHub Security Tab
-
-```yaml
-- uses: ImL1s/aigate@main
-  id: security
-  with:
-    lockfile: requirements.txt
-    format: sarif
+- name: Run aigate with SARIF output
+  run: aigate scan requirements.txt --sarif > results.sarif
 
 - name: Upload SARIF
   if: always()
   uses: github/codeql-action/upload-sarif@v3
   with:
-    sarif_file: ${{ steps.security.outputs.report }}
+    sarif_file: results.sarif
 ```
 
 Once uploaded, findings appear under the repository's **Security > Code scanning alerts** tab, with inline annotations on affected files.

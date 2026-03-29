@@ -34,7 +34,7 @@
 
 Static pattern matching. Catches ~80% of known attack patterns:
 
-- **17 dangerous code patterns** (eval, exec, subprocess, base64, credential access, network calls, token env vars)
+- **18 dangerous code patterns** (eval, exec, subprocess, base64, credential access, network calls, token env vars)
 - **Typosquatting** detection via name similarity against top packages
 - **Shannon entropy** for obfuscated/encoded payloads (threshold: 5.5)
 - **Metadata anomalies** (no author, no repo, install scripts, low downloads)
@@ -102,4 +102,4 @@ E2E tests are **skipped** in normal `pytest` runs. They only execute when `AIGAT
 | Cannot detect runtime-only attacks | Code that downloads payload after install, not during | AI can flag suspicious network setup |
 | Limited to text file analysis | Binary payloads, compiled extensions not scanned | Entropy check on text; future: binary analysis |
 | AI prompt injection | Malicious code can try to manipulate AI verdict | `UNTRUSTED_PACKAGE_CODE` delimiters + multi-model consensus |
-| No Go/Rust/Dart support yet | Resolver only supports PyPI + npm | Phase 2 roadmap |
+| No Go/Rust support yet | Resolver supports PyPI, npm, and pub.dev (Dart) | Phase 2 roadmap |

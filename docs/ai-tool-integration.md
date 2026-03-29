@@ -129,7 +129,7 @@ lint-cmd: "aigate scan requirements.txt --skip-ai"
 aigate install-hooks --tool opencode
 ```
 
-This generates a JavaScript plugin in `.opencode/plugins/aigate-security.js` that intercepts shell commands containing `pip install` or `npm install`.
+This generates a JavaScript plugin in `.opencode/plugins/aigate-scanner.mjs` that intercepts shell commands containing `pip install` or `npm install`.
 
 ### Cline
 
