@@ -172,6 +172,29 @@ if pod_m:
         emit({"mode": "scan", "ecosystem": "pub", "lockfile": "Podfile.lock"})
     sys.exit(0)
 
+# Cargo: cargo add <crate>, cargo install <crate>
+cargo_m = re.search(
+    r"(?:^|[;\s&|]+)cargo\s+(?:add|install)(?:\s+(.*))?$",
+    cmd,
+)
+if cargo_m:
+    args = (cargo_m.group(1) or "").strip()
+    packages = []
+    skip_next = False
+    for tok in args.split():
+        if skip_next:
+            skip_next = False
+            continue
+        if tok in ("--git", "--path", "--registry", "--version", "--branch", "--tag", "--rev"):
+            skip_next = True
+            continue
+        if tok.startswith("-"):
+            continue
+        packages.append(tok)
+    if packages:
+        emit({"mode": "check", "ecosystem": "cargo", "packages": packages})
+    sys.exit(0)
+
 sys.exit(0)
 ' 2>/dev/null || echo "")
 

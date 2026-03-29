@@ -74,6 +74,31 @@ POPULAR_NPM: set[str] = {
     "cross-env",
 }
 
+POPULAR_CARGO: set[str] = {
+    "serde",
+    "tokio",
+    "rand",
+    "clap",
+    "reqwest",
+    "hyper",
+    "axum",
+    "actix-web",
+    "diesel",
+    "sqlx",
+    "tracing",
+    "anyhow",
+    "thiserror",
+    "chrono",
+    "regex",
+    "log",
+    "serde_json",
+    "futures",
+    "async-trait",
+    "bytes",
+    "once_cell",
+    "lazy_static",
+}
+
 # Known dangerous patterns in install scripts
 DANGEROUS_PATTERNS: list[re.Pattern] = [
     re.compile(r"\beval\s*\(", re.IGNORECASE),
@@ -166,7 +191,12 @@ def run_prefilter(
 
 def check_typosquatting(name: str, ecosystem: str) -> list[str]:
     """Check if package name is suspiciously similar to popular packages."""
-    popular = POPULAR_PYPI if ecosystem == "pypi" else POPULAR_NPM
+    popular_map: dict[str, set[str]] = {
+        "pypi": POPULAR_PYPI,
+        "npm": POPULAR_NPM,
+        "cargo": POPULAR_CARGO,
+    }
+    popular = popular_map.get(ecosystem, POPULAR_PYPI)
     matches = []
     for known in popular:
         if name == known:
