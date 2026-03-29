@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .skill_template import AIGATE_CHECK_SKILL, AIGATE_SCAN_SKILL
+
 # The core instruction block — same content for all tools
 AIGATE_INSTRUCTION = """\
 ## Package Security (aigate)
@@ -107,5 +109,65 @@ def generate_instruction_files(
             file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_text(AIGATE_INSTRUCTION)
             messages.append(f"Created {file_path} with aigate instructions")
+
+    return messages
+
+
+# Skill file targets — same SKILL.md content for all tools
+SKILL_TARGETS: dict[str, dict[str, str]] = {
+    "claude": {
+        "check": ".claude/skills/aigate-check/SKILL.md",
+        "scan": ".claude/skills/aigate-scan/SKILL.md",
+    },
+    "gemini": {
+        "check": ".gemini/skills/aigate-check/SKILL.md",
+        "scan": ".gemini/skills/aigate-scan/SKILL.md",
+    },
+    "codex": {
+        "check": ".codex/skills/aigate-check/SKILL.md",
+        "scan": ".codex/skills/aigate-scan/SKILL.md",
+    },
+}
+
+SKILL_MARKER = "name: aigate-check"
+
+
+def generate_skill_files(
+    project_dir: Path,
+    tools: list[str] | None = None,
+) -> list[str]:
+    """Generate SKILL.md files for AI coding tools.
+
+    Args:
+        project_dir: Project root directory.
+        tools: List of tool names (claude/gemini/codex), or None for all.
+
+    Returns:
+        List of status messages.
+    """
+    messages: list[str] = []
+    targets = SKILL_TARGETS
+    if tools:
+        targets = {k: v for k, v in targets.items() if k in tools}
+
+    skill_map = {
+        "check": AIGATE_CHECK_SKILL,
+        "scan": AIGATE_SCAN_SKILL,
+    }
+
+    for tool_name, paths in targets.items():
+        for skill_kind, rel_path in paths.items():
+            file_path = project_dir / rel_path
+            content = skill_map[skill_kind]
+
+            if file_path.exists():
+                existing = file_path.read_text()
+                if "name: aigate-" in existing:
+                    messages.append(f"(skip) {file_path} already has aigate skill")
+                    continue
+
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_text(content)
+            messages.append(f"Created {file_path} ({tool_name}/aigate-{skill_kind})")
 
     return messages

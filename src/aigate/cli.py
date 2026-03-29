@@ -589,11 +589,20 @@ def init():
         )
 
     # Generate AI tool instruction files
-    from .instructions import generate_instruction_files
+    from .instructions import generate_instruction_files, generate_skill_files
 
     console.print("\n[bold]Generating AI tool instruction files...[/bold]")
     instruction_messages = generate_instruction_files(Path.cwd())
     for msg in instruction_messages:
+        if msg.startswith("(skip)"):
+            console.print(f"  [dim]{msg}[/dim]")
+        else:
+            console.print(f"  [green]{msg}[/green]")
+
+    # Generate skill files for Claude Code, Gemini CLI, Codex CLI
+    console.print("\n[bold]Generating skill files...[/bold]")
+    skill_messages = generate_skill_files(Path.cwd())
+    for msg in skill_messages:
         if msg.startswith("(skip)"):
             console.print(f"  [dim]{msg}[/dim]")
         else:
@@ -621,7 +630,7 @@ def instructions(tools: tuple[str, ...]):
     """
     from pathlib import Path
 
-    from .instructions import generate_instruction_files
+    from .instructions import generate_instruction_files, generate_skill_files
 
     tool_list = list(tools) if tools else None
     messages = generate_instruction_files(Path.cwd(), tools=tool_list)
@@ -631,8 +640,17 @@ def instructions(tools: tuple[str, ...]):
         else:
             console.print(f"  [green]{msg}[/green]")
 
-    if not messages:
-        console.print("[yellow]No instruction files to generate.[/yellow]")
+    # Generate skill files
+    skill_messages = generate_skill_files(Path.cwd(), tools=tool_list)
+    for msg in skill_messages:
+        if msg.startswith("(skip)"):
+            console.print(f"  [dim]{msg}[/dim]")
+        else:
+            console.print(f"  [green]{msg}[/green]")
+
+    all_messages = messages + skill_messages
+    if not all_messages:
+        console.print("[yellow]No instruction or skill files to generate.[/yellow]")
 
 
 @main.command()
