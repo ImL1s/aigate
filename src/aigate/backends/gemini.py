@@ -20,20 +20,20 @@ class GeminiBackend(AIBackend):
     async def analyze(self, prompt: str, level: AnalysisLevel = AnalysisLevel.L1_QUICK) -> str:
         if not self._binary:
             raise RuntimeError(
-                "Gemini CLI not found. Install: npm i -g @anthropic-ai/gemini-cli "
+                "Gemini CLI not found. Install: npm i -g @google/gemini-cli "
                 "or brew install gemini-cli"
             )
 
         proc = await asyncio.create_subprocess_exec(
             self._binary,
-            "-p",
-            prompt,
-            stdin=asyncio.subprocess.DEVNULL,
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=self.timeout)
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(input=prompt.encode()), timeout=self.timeout
+            )
         except TimeoutError:
             proc.kill()
             raise RuntimeError(f"Gemini analysis timed out after {self.timeout}s")

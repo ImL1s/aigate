@@ -24,18 +24,20 @@ class CodexBackend(AIBackend):
         cmd = [
             self._binary,
             "-q",
-            prompt,
             "--model",
             self.model_id,
         ]
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=self.timeout)
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(input=prompt.encode()), timeout=self.timeout
+            )
         except TimeoutError:
             proc.kill()
             raise RuntimeError(f"Codex analysis timed out after {self.timeout}s")

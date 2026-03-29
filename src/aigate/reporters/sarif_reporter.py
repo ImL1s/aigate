@@ -67,7 +67,7 @@ class SarifReporter:
                         "driver": {
                             "name": "aigate",
                             "version": __version__,
-                            "informationUri": "https://github.com/aetherclouds/aigate",
+                            "informationUri": "https://github.com/ImL1s/aigate",
                             "rules": [
                                 {
                                     "id": "aigate/supply-chain-risk",

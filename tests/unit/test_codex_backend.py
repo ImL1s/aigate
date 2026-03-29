@@ -32,6 +32,7 @@ async def test_codex_binary_not_found(monkeypatch):
 async def test_codex_analyze_calls_subprocess(monkeypatch):
     """Verify the subprocess command is constructed correctly."""
     captured_cmd = []
+    captured_input = None
 
     async def fake_exec(*cmd, **kwargs):
         captured_cmd.extend(cmd)
@@ -39,7 +40,9 @@ async def test_codex_analyze_calls_subprocess(monkeypatch):
         class FakeProc:
             returncode = 0
 
-            async def communicate(self):
+            async def communicate(self, input=None):
+                nonlocal captured_input
+                captured_input = input
                 return (
                     b'{"verdict": "safe", "confidence": 0.9, "risk_signals": []}',
                     b"",
@@ -54,6 +57,9 @@ async def test_codex_analyze_calls_subprocess(monkeypatch):
     await backend.analyze("test prompt")
     assert "/usr/bin/codex" in captured_cmd
     assert "-q" in captured_cmd
+    # Prompt should NOT be in cmd args (avoids ARG_MAX); piped via stdin instead
+    assert "test prompt" not in captured_cmd
+    assert captured_input == b"test prompt"
 
 
 async def test_codex_analyze_timeout(monkeypatch):
@@ -63,7 +69,7 @@ async def test_codex_analyze_timeout(monkeypatch):
         class FakeProc:
             returncode = 0
 
-            async def communicate(self):
+            async def communicate(self, input=None):
                 import asyncio
 
                 await asyncio.sleep(999)
@@ -89,7 +95,7 @@ async def test_codex_analyze_nonzero_exit(monkeypatch):
         class FakeProc:
             returncode = 1
 
-            async def communicate(self):
+            async def communicate(self, input=None):
                 return b"", b"some error"
 
         return FakeProc()

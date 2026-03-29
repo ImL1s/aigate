@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from abc import ABC, abstractmethod
 
 from ..models import AnalysisLevel, ModelResult, Verdict
@@ -223,8 +224,6 @@ class AIBackend(ABC):
             level=level,
         )
 
-        import time
-
         start = time.monotonic()
         raw = await self.analyze_with_roles(system, user, level)
         latency = int((time.monotonic() - start) * 1000)
@@ -259,8 +258,6 @@ class AIBackend(ABC):
             diff_content=diff_content,
             level=level,
         )
-
-        import time
 
         start = time.monotonic()
         raw = await self.analyze_with_roles(system, user, level)
