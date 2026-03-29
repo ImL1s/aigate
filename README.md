@@ -38,6 +38,7 @@ Existing tools only catch **known** vulnerabilities. aigate catches **unknown** 
 | Works without API keys | Yes (prefilter) | Yes | Yes | Yes | Freemium |
 | AI tool integration | **9 tools** | -- | -- | -- | GitHub App |
 | Ecosystems | PyPI, npm, pub, Cargo, Gem, Composer, Go, NuGet | PyPI, npm, Go, Ruby | PyPI | 16+ | npm, PyPI |
+| Extensible YAML rules | **BYO rules + compound detection** | Semgrep rules | -- | -- | -- |
 | Self-hostable | **100% open source** | Yes | Yes | Yes | Cloud only |
 
 **aigate reads code intent via LLMs** — a new package that reads `~/.ssh/id_rsa` and POSTs it to a random domain gets caught on day one, even with zero prior reports. Other tools need to wait for someone to report it.
@@ -217,6 +218,29 @@ Tested against real-world attack patterns (synthetic reproductions in E2E Docker
 | curl\|sh pipe install | Install scripts | Warn on piping remote scripts to shell |
 | Untrusted Docker images | Typosquatted images | Warn on `docker pull`/`run` from untrusted registries |
 | AI agent vectors | MCP servers, skills, rules | Scan for prompt injection, reverse shells, credential access |
+
+## Extensible YAML Rules
+
+Detection patterns are defined as YAML rules, not hardcoded regexes. Add your own rules, override built-in severity, or disable noisy rules:
+
+```bash
+# List all rules
+aigate rules list
+
+# Filter by tag
+aigate rules list --tag credential_access
+
+# Show statistics
+aigate rules stats
+```
+
+**Custom rules:** Drop `.yml` files in `~/.aigate/rules/` or configure `rules.user_rules_dir` in `.aigate.yml`.
+
+**Disable rules:** Add rule IDs to `rules.disable_rules` in `.aigate.yml`.
+
+**Compound detection:** Multiple LOW signals in the same file (execution + credential access + exfiltration) escalate to CRITICAL.
+
+See [docs/rules.md](docs/rules.md) for the full rule format reference and examples.
 
 ## Security Model
 

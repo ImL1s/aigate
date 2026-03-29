@@ -77,6 +77,10 @@ User runs: aigate check <package>
 | **Hook Installer** | `hook_installer.py` | Install PreToolUse hooks into AI tool configs |
 | **Detect** | `detect.py` | Auto-detect installed AI backends and hook tools |
 | **Instructions** | `instructions.py` | Generate LLM instruction files (CLAUDE.md, GEMINI.md, etc.) |
+| **Rules Engine** | `rules/` | Extensible YAML-based detection rules. Built-in + user custom rules, compound signal detection, auto-updating popular package lists |
+| **Rule Loader** | `rules/loader.py` | Load and merge YAML rule files from builtin + user directories. Filter by ecosystem, disable by ID |
+| **Compound Detector** | `rules/compound.py` | Escalate severity when multiple signal categories appear in the same file (e.g. execution + credential access + exfiltration) |
+| **Popular Packages** | `rules/popular_packages.py` | Auto-fetch top 1000 PyPI/npm packages for typosquatting detection. 7-day cache with fallback |
 | **Agent Scanner** | `agent_scanner.py` | Scan MCP configs, agent skill files, and AI rules files for prompt injection and malicious patterns |
 | **Config Validator** | `config_validator.py` | Validate `.aigate.yml` schema and values |
 | **Rate Limiter** | `rate_limiter.py` | Per-backend rate limiting for API calls |

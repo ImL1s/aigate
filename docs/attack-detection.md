@@ -32,13 +32,15 @@
 
 ### Layer 1: Pre-Filter (no AI, <1s)
 
-Static pattern matching. Catches ~80% of known attack patterns:
+Static pattern matching via extensible YAML rules. Catches ~80% of known attack patterns:
 
-- **18 dangerous code patterns** (eval, exec, subprocess, base64, credential access, network calls, token env vars)
-- **Typosquatting** detection via name similarity against top packages
+- **YAML-based detection rules** across 6 categories: dangerous patterns, credential access, exfiltration, obfuscation, install hooks, and Node.js-specific patterns (see [docs/rules.md](rules.md))
+- **Compound signal detection** escalates severity when multiple signal categories (execution + credential access + exfiltration) appear in the same file
+- **Typosquatting** detection via name similarity against auto-updating top 1000 PyPI/npm packages
 - **Shannon entropy** for obfuscated/encoded payloads (threshold: 5.5)
 - **Metadata anomalies** (no author, no repo, install scripts, low downloads)
 - **Whitelist/Blocklist** enforcement
+- **Custom rules** via `~/.aigate/rules/` or `rules.user_rules_dir` config. Disable noisy rules with `rules.disable_rules`
 
 ### Layer 2: AI Consensus (multi-model, 10-60s)
 
