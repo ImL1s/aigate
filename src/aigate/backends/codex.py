@@ -21,11 +21,11 @@ class CodexBackend(AIBackend):
         if not self._binary:
             raise RuntimeError("Codex CLI not found. Install: npm i -g @openai/codex")
 
+        # Codex non-interactive mode: `codex exec -` reads prompt from stdin
         cmd = [
             self._binary,
-            "-q",
-            "--model",
-            self.model_id,
+            "exec",
+            "-",
         ]
 
         proc = await asyncio.create_subprocess_exec(

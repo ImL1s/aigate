@@ -56,7 +56,7 @@ async def test_codex_analyze_calls_subprocess(monkeypatch):
     backend = CodexBackend(model_id="o3")
     await backend.analyze("test prompt")
     assert "/usr/bin/codex" in captured_cmd
-    assert "-q" in captured_cmd
+    assert "exec" in captured_cmd
     # Prompt should NOT be in cmd args (avoids ARG_MAX); piped via stdin instead
     assert "test prompt" not in captured_cmd
     assert captured_input == b"test prompt"
