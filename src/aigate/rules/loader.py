@@ -31,6 +31,7 @@ def load_rules(
     builtin_dir: Path | None = None,
     user_dir: Path | None = None,
     ecosystem: str | None = None,
+    disable_rules: list[str] | None = None,
 ) -> list[Rule]:
     """Load rules from builtin + user directories.
 
@@ -40,7 +41,9 @@ def load_rules(
     Args:
         builtin_dir: Directory containing built-in YAML rule files.
         user_dir: Optional directory with user-provided overrides.
+            Defaults to ``~/.aigate/rules/`` when not provided and that dir exists.
         ecosystem: If given, only return rules matching this ecosystem or ``"*"``.
+        disable_rules: Rule IDs to exclude from the result.
 
     Returns:
         Merged list of Rule objects.
@@ -62,6 +65,11 @@ def load_rules(
     # Filter by ecosystem if requested
     if ecosystem is not None:
         rules = [r for r in rules if r.ecosystem == "*" or r.ecosystem == ecosystem]
+
+    # Filter out disabled rules
+    if disable_rules:
+        disabled = set(disable_rules)
+        rules = [r for r in rules if r.id not in disabled]
 
     return rules
 

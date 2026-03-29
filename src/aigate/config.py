@@ -54,6 +54,8 @@ class Config:
     output_format: str = "rich"  # rich, json, sarif
     ecosystems: list[str] = field(default_factory=lambda: ["pypi", "npm", "pub"])
     enrichment: EnrichmentConfig = field(default_factory=EnrichmentConfig)
+    rules_dir: str = ""  # extra rules directory (e.g. ~/.aigate/rules/)
+    disable_rules: list[str] = field(default_factory=list)  # rule IDs to skip
 
     @classmethod
     def default(cls) -> Config:
@@ -132,6 +134,11 @@ def _parse_config(path: Path) -> Config:
             disagreement=t.get("disagreement", 0.4),
         )
 
+    # Parse rules section
+    rules_raw = raw.get("rules", {}) or {}
+    rules_dir = rules_raw.get("user_rules_dir", "")
+    disable_rules = rules_raw.get("disable_rules", [])
+
     return Config(
         models=models or Config.default().models,
         thresholds=thresholds,
@@ -143,6 +150,8 @@ def _parse_config(path: Path) -> Config:
         output_format=raw.get("output_format", "rich"),
         ecosystems=raw.get("ecosystems", ["pypi", "npm", "pub"]),
         enrichment=_parse_enrichment(raw.get("enrichment", {})),
+        rules_dir=rules_dir,
+        disable_rules=disable_rules,
     )
 
 

@@ -1,0 +1,26 @@
+# Example custom rules for aigate
+#
+# Place your custom YAML rule files in ~/.aigate/rules/ (or the directory
+# configured via rules.user_rules_dir in .aigate.yml).
+#
+# Rules with the same `id` as a built-in rule will override it.
+# See docs/rules.md for the full rule format reference.
+
+rules:
+  # Example: flag a project-internal function that should never appear in deps
+  - id: custom-internal-api
+    pattern: 'internal_secret_api\('
+    severity: high
+    scope: any
+    ecosystem: "*"
+    description: "References to internal API that should not exist in third-party packages"
+    tags: [custom, suspicious]
+
+  # Example: stricter eval check for install scripts only
+  - id: eval-install-strict
+    pattern: '\beval\s*\('
+    severity: critical
+    scope: install_script
+    ecosystem: "*"
+    description: "eval() in install script — extremely dangerous"
+    tags: [execution, install-time, custom]
