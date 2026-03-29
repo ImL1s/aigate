@@ -268,6 +268,25 @@ if dotnet_m:
         emit({"mode": "check", "ecosystem": "nuget", "packages": packages})
     sys.exit(0)
 
+# ---- Non-package vectors ----
+
+# Detect: curl ... | sh, curl ... | bash, curl ... | zsh, wget ... | sh, wget ... | bash
+pipe_m = re.search(
+    r"(?:curl|wget)\s+[^|]+\|\s*(?:ba|z)?sh",
+    cmd,
+)
+if pipe_m:
+    url_m = re.search(r"(?:curl|wget)\s+(?:-[^\s]*\s+)*(\S+)", cmd)
+    url = url_m.group(1) if url_m else "unknown"
+    # Strip common curl flags that are not URLs
+    if url.startswith("-"):
+        url = "unknown"
+    emit({
+        "mode": "warn",
+        "reason": f"Piping remote script to shell: {url}",
+        "risk": "HIGH",
+    })
+
 sys.exit(0)
 ' 2>/dev/null || echo "")
 
@@ -280,7 +299,24 @@ ECOSYSTEM=$(echo "$PARSED" | python3 -c "import sys, json; print(json.load(sys.s
 LOCKFILE=$(echo "$PARSED" | python3 -c "import sys, json; print(json.load(sys.stdin).get('lockfile', ''))" 2>/dev/null || echo "")
 PKG_LIST=$(echo "$PARSED" | python3 -c "import sys, json; print(' '.join(json.load(sys.stdin).get('packages', [])))" 2>/dev/null || echo "")
 
-if [[ -z "$MODE" ]] || [[ -z "$ECOSYSTEM" ]]; then
+if [[ -z "$MODE" ]]; then
+  exit 0
+fi
+
+# Warn mode: emit warning JSON directly (non-blocking)
+if [[ "$MODE" == "warn" ]]; then
+  WARN_REASON=$(echo "$PARSED" | python3 -c "import sys, json; print(json.load(sys.stdin).get('reason', ''))" 2>/dev/null || echo "")
+  WARN_RISK=$(echo "$PARSED" | python3 -c "import sys, json; print(json.load(sys.stdin).get('risk', 'MEDIUM'))" 2>/dev/null || echo "MEDIUM")
+  if [[ -n "$WARN_REASON" ]]; then
+    python3 -c "
+import json, sys
+print(json.dumps({'decision': 'allow', 'warning': sys.argv[1], 'risk': sys.argv[2]}))
+" "$WARN_REASON" "$WARN_RISK"
+  fi
+  exit 0
+fi
+
+if [[ -z "$ECOSYSTEM" ]]; then
   exit 0
 fi
 
