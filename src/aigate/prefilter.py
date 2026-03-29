@@ -8,6 +8,7 @@ from difflib import SequenceMatcher
 
 from .config import Config
 from .models import PackageInfo, PrefilterResult, RiskLevel
+from .rules.compound import check_compound_signals
 from .rules.loader import Rule, load_rules
 from .rules.popular_packages import _read_cache
 
@@ -223,7 +224,13 @@ def run_prefilter(
         code_signals = check_dangerous_patterns(source_files)
         signals.extend(code_signals)
 
-    # 6. Shannon entropy check for obfuscation
+    # 6. Compound signal detection (multi-indicator attack chains)
+    if source_files:
+        per_file = _build_per_file_signals(source_files, package.ecosystem)
+        compound_signals = check_compound_signals(per_file)
+        signals.extend(compound_signals)
+
+    # 7. Shannon entropy check for obfuscation
     if source_files:
         entropy_signals = check_high_entropy(source_files)
         signals.extend(entropy_signals)
@@ -397,6 +404,63 @@ def check_dangerous_patterns(
                 )
 
     return signals
+
+
+def _build_per_file_signals(
+    source_files: dict[str, str],
+    ecosystem: str = "*",
+) -> dict[str, list[dict]]:
+    """Build per-file signal dicts with rule tags for compound detection.
+
+    Returns a mapping of ``filepath`` → list of ``{"rule_id": ..., "tags": [...]}``.
+    Only code files are scanned (same skip logic as ``check_dangerous_patterns``).
+    """
+    rules = _get_rules()
+    skip_extensions = {
+        ".md",
+        ".rst",
+        ".txt",
+        ".html",
+        ".css",
+        ".yml",
+        ".yaml",
+        ".toml",
+        ".cfg",
+        ".ini",
+        ".json",
+        ".lock",
+    }
+    skip_dirs = {
+        ".github",
+        ".circleci",
+        ".gitlab",
+        ".travis",
+        ".jenkins",
+        "__pycache__",
+        "node_modules",
+        ".git",
+    }
+
+    result: dict[str, list[dict]] = {}
+
+    for filepath, content in source_files.items():
+        filename = filepath.rsplit("/", 1)[-1] if "/" in filepath else filepath
+        suffix = ("." + filename.rsplit(".", 1)[-1]).lower() if "." in filename else ""
+
+        if any(part in skip_dirs for part in filepath.split("/")):
+            continue
+        if suffix in skip_extensions:
+            continue
+
+        for rule in rules:
+            if rule.ecosystem != "*" and rule.ecosystem != ecosystem:
+                continue
+            if rule.pattern.search(content):
+                result.setdefault(filepath, []).append(
+                    {"rule_id": rule.id, "tags": list(rule.tags)}
+                )
+
+    return result
 
 
 def check_high_entropy(
