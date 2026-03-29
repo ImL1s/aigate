@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from pathlib import Path
 
 import httpx
 import pytest
@@ -47,15 +48,26 @@ ALL_PACKAGES = [
 
 @pytest.fixture(scope="session")
 def _pypi_available() -> None:
-    """Check that pypiserver is reachable (session-scoped, runs once)."""
+    """Check that pypiserver is reachable (session-scoped, runs once).
+
+    Retries a few times since pypiserver may still be starting up
+    even after Docker healthcheck passes.
+    """
     if not E2E:
         pytest.skip("E2E not enabled")
-    try:
-        base = PYPI_URL.split("/simple")[0] + "/"
-        resp = httpx.get(base, timeout=5)
-        assert resp.status_code == 200
-    except Exception as exc:
-        pytest.fail(f"pypiserver not reachable at {PYPI_URL}: {exc}")
+    import time
+
+    base = PYPI_URL.split("/simple")[0] + "/"
+    last_exc: Exception | None = None
+    for attempt in range(10):
+        try:
+            resp = httpx.get(base, timeout=5)
+            if resp.status_code == 200:
+                return
+        except Exception as exc:
+            last_exc = exc
+        time.sleep(1)
+    pytest.fail(f"pypiserver not reachable at {PYPI_URL} after 10 retries: {last_exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -123,18 +135,29 @@ class TestNetworkIsolation:
 
 
 class TestCLIIntegration:
-    """Test aigate CLI binary with --skip-ai against local pypiserver."""
+    """Test aigate CLI binary with --skip-ai using --local flag (no network needed)."""
 
-    async def test_cli_check_flags_malicious(self, _pypi_available: None) -> None:
-        """aigate check should return exit code >= 1 for a malicious package."""
+    @pytest.fixture(autouse=True)
+    def _extract_ctx_package(self, tmp_path: Path, _pypi_available: None) -> None:
+        """Extract ctx package to a temp dir for --local testing."""
+        import tarfile
+
+        pkg_dir = Path(__file__).parent / "packages"
+        tar_path = pkg_dir / "ctx-0.2.6.tar.gz"
+        if not tar_path.exists():
+            pytest.skip("ctx-0.2.6.tar.gz not built")
+        with tarfile.open(tar_path, "r:gz") as tar:
+            tar.extractall(tmp_path)
+        self._local_path = str(tmp_path)
+
+    async def test_cli_check_flags_malicious(self) -> None:
+        """aigate check with --local should return exit code >= 1 for malicious."""
         proc = await asyncio.create_subprocess_exec(
-            ".venv/bin/aigate",
+            "aigate",
             "check",
             "ctx",
-            "-v",
-            "0.2.6",
-            "-e",
-            "pypi",
+            "--local",
+            self._local_path,
             "--skip-ai",
             "--json",
             stdout=asyncio.subprocess.PIPE,
@@ -148,16 +171,14 @@ class TestCLIIntegration:
             f"Expected exit 1 or 2, got {proc.returncode}. Output: {stdout.decode()[:500]}"
         )
 
-    async def test_cli_check_json_output_valid(self, _pypi_available: None) -> None:
+    async def test_cli_check_json_output_valid(self) -> None:
         """JSON output should be parseable with expected fields."""
         proc = await asyncio.create_subprocess_exec(
-            ".venv/bin/aigate",
+            "aigate",
             "check",
-            "typesutil",
-            "-v",
-            "0.1.3",
-            "-e",
-            "pypi",
+            "ctx",
+            "--local",
+            self._local_path,
             "--skip-ai",
             "--json",
             stdout=asyncio.subprocess.PIPE,

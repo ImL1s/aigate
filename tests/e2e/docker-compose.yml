@@ -13,18 +13,25 @@
 services:
   pypi:
     image: pypiserver/pypiserver:latest
-    command: run -p 8080 -a . /data/packages
+    command: run -p 8080 -a . -P . /data/packages
     volumes:
       - ./packages:/data/packages:ro
     networks:
       - sandbox
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/')\" || exit 1"]
+      interval: 2s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
 
   runner:
     build:
       context: ../..
       dockerfile: tests/e2e/Dockerfile
     depends_on:
-      - pypi
+      pypi:
+        condition: service_healthy
     environment:
       - AIGATE_E2E=1
       - AIGATE_E2E_PYPI_URL=http://pypi:8080/simple/

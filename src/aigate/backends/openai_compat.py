@@ -33,6 +33,29 @@ class OpenAICompatBackend(AIBackend):
         self._api_key = os.environ.get(api_key_env) if api_key_env else None
 
     async def analyze(self, prompt: str, level: AnalysisLevel = AnalysisLevel.L1_QUICK) -> str:
+        return await self._chat_completions(
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+    async def analyze_with_roles(
+        self,
+        system: str,
+        user: str,
+        level: AnalysisLevel = AnalysisLevel.L1_QUICK,
+    ) -> str:
+        """Send system + user messages via proper chat/completions roles."""
+        return await self._chat_completions(
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+
+    async def _chat_completions(
+        self,
+        messages: list[dict[str, str]],
+    ) -> str:
+        """Send messages to the chat/completions endpoint."""
         url = f"{self.base_url}/chat/completions"
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._api_key:
@@ -40,7 +63,7 @@ class OpenAICompatBackend(AIBackend):
 
         payload = {
             "model": self.model_id,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
             "temperature": 0.1,
             "max_tokens": 2048,
         }

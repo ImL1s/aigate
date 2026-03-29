@@ -22,10 +22,33 @@ class OllamaBackend(AIBackend):
         self.timeout = timeout
 
     async def analyze(self, prompt: str, level: AnalysisLevel = AnalysisLevel.L1_QUICK) -> str:
-        url = f"{self.base_url}/api/generate"
+        return await self._ollama_chat(
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+    async def analyze_with_roles(
+        self,
+        system: str,
+        user: str,
+        level: AnalysisLevel = AnalysisLevel.L1_QUICK,
+    ) -> str:
+        """Send system + user messages via Ollama chat API."""
+        return await self._ollama_chat(
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+
+    async def _ollama_chat(
+        self,
+        messages: list[dict[str, str]],
+    ) -> str:
+        """Send messages to the Ollama /api/chat endpoint."""
+        url = f"{self.base_url}/api/chat"
         payload = {
             "model": self.model_id,
-            "prompt": prompt,
+            "messages": messages,
             "stream": False,
             "options": {
                 "temperature": 0.1,
@@ -38,7 +61,7 @@ class OllamaBackend(AIBackend):
                 resp = await client.post(url, json=payload)
                 resp.raise_for_status()
                 data = resp.json()
-                return data.get("response", "")
+                return data.get("message", {}).get("content", "")
             except httpx.ConnectError:
                 raise RuntimeError(
                     f"Cannot connect to Ollama at {self.base_url}. "

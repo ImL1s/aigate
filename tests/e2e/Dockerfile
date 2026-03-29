@@ -2,17 +2,17 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install uv for fast dependency resolution
-RUN pip install uv
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 # Copy project
 COPY . .
 
-# Install aigate in the container
-RUN uv venv && uv pip install -e ".[dev]"
+# Install aigate using system Python (no venv needed in container)
+RUN uv pip install --system -e ".[dev]"
 
 # Build synthetic packages
-RUN .venv/bin/python tests/e2e/build_packages.py
+RUN python tests/e2e/build_packages.py
 
 # Default command: run E2E tests
-CMD [".venv/bin/python", "-m", "pytest", "tests/e2e/", "-v", "--tb=short"]
+CMD ["python", "-m", "pytest", "tests/e2e/", "-v", "--tb=short"]

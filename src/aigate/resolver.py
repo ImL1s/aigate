@@ -362,7 +362,7 @@ def _extract_npm_repo(data: dict) -> str:
 # E2E sandbox helpers — download from local pypiserver
 # ---------------------------------------------------------------------------
 
-_HREF_RE = re.compile(r'href="([^"]+\.tar\.gz)"', re.IGNORECASE)
+_HREF_RE = re.compile(r'href="([^"#]+\.tar\.gz)(?:#[^"]*)?"', re.IGNORECASE)
 
 
 async def download_from_local_pypi(

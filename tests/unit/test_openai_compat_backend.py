@@ -217,3 +217,67 @@ async def test_analyze_empty_choices(monkeypatch):
     backend = OpenAICompatBackend(base_url="http://localhost:11434/v1")
     with pytest.raises(RuntimeError, match="Unexpected response format"):
         await backend.analyze("test")
+
+
+async def test_analyze_with_roles_sends_system_and_user(monkeypatch):
+    """Verify analyze_with_roles sends proper system + user message roles."""
+    captured_request: dict = {}
+
+    async def fake_post(self, url, **kwargs):
+        captured_request["json"] = kwargs.get("json")
+        return _ok_response({"choices": [{"message": {"content": _SAFE_JSON}}]})
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    backend = OpenAICompatBackend(
+        base_url="http://localhost:11434/v1",
+        model_id="test-model",
+    )
+    await backend.analyze_with_roles(
+        system="You are a security analyst.",
+        user="Analyze this package.",
+    )
+
+    messages = captured_request["json"]["messages"]
+    assert len(messages) == 2
+    assert messages[0]["role"] == "system"
+    assert messages[0]["content"] == "You are a security analyst."
+    assert messages[1]["role"] == "user"
+    assert messages[1]["content"] == "Analyze this package."
+
+
+async def test_analyze_package_uses_roles(monkeypatch):
+    """Verify analyze_package routes through analyze_with_roles with separated messages."""
+    captured_request: dict = {}
+
+    async def fake_post(self, url, **kwargs):
+        captured_request["json"] = kwargs.get("json")
+        return _ok_response({"choices": [{"message": {"content": _SAFE_JSON}}]})
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    backend = OpenAICompatBackend(
+        base_url="http://localhost:11434/v1",
+        model_id="test-model",
+    )
+    await backend.analyze_package(
+        name="test-pkg",
+        version="1.0.0",
+        ecosystem="pypi",
+        author="tester",
+        description="a test",
+        has_install_scripts=False,
+        risk_signals=[],
+        source_code="print('hello')",
+    )
+
+    messages = captured_request["json"]["messages"]
+    assert len(messages) == 2
+    assert messages[0]["role"] == "system"
+    assert messages[1]["role"] == "user"
+    # System message has instructions, not package data
+    assert "security analyst" in messages[0]["content"].lower()
+    assert "Respond with ONLY" in messages[0]["content"]
+    # User message has package data, not instructions
+    assert "test-pkg" in messages[1]["content"]
+    assert "print('hello')" in messages[1]["content"]

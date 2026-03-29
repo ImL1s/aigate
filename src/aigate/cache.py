@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
+import tempfile
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -59,13 +61,32 @@ def set_cached(
     report: AnalysisReport,
     cache_dir: str,
 ) -> None:
-    """Write analysis result to cache."""
+    """Write analysis result to cache using atomic write.
+
+    Writes to a temporary file first, then atomically replaces the target.
+    This prevents concurrent readers from seeing partial/corrupt JSON.
+    """
     d = _cache_dir(cache_dir)
     key = _cache_key(name, version, ecosystem)
     path = d / f"{key}.json"
     data = asdict(report)
     data["_cached_at"] = time.time()
+    fd = None
+    tmp_path = None
     try:
-        path.write_text(json.dumps(data, default=str))
+        fd, tmp_path = tempfile.mkstemp(dir=d, suffix=".tmp")
+        with os.fdopen(fd, "w") as f:
+            fd = None  # os.fdopen takes ownership of fd
+            json.dump(data, f, default=str)
+        os.replace(tmp_path, path)  # Atomic on POSIX
+        tmp_path = None  # Successfully replaced, no cleanup needed
     except OSError:
         pass
+    finally:
+        if fd is not None:
+            os.close(fd)
+        if tmp_path is not None:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass

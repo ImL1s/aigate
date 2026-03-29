@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"additionalContext\":\"Reminder: run /verify before committing.\"}}'",
+            "command": "echo '{\"systemMessage\":\"Reminder: run /verify before committing.\"}'",
             "timeout": 5
           }
         ]
