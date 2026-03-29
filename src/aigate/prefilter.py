@@ -313,7 +313,12 @@ def check_dangerous_patterns(
             matches = pattern.findall(content)
             if matches:
                 label = "install_script" if is_install_file else "source"
-                risk = "HIGH" if is_install_file else "MEDIUM"
+                # Install scripts (setup.py, postinstall.js) are HIGH risk —
+                # code there runs automatically at install time.
+                # Regular source files are LOW — patterns like requests.get()
+                # or subprocess are normal library code, not attack indicators.
+                # Only escalate to AI review based on install script findings.
+                risk = "HIGH" if is_install_file else "LOW"
                 signals.append(
                     f"dangerous_pattern({risk}): '{pattern.pattern}' in {label}:{filepath}"
                 )
