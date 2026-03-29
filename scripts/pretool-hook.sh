@@ -287,6 +287,22 @@ if pipe_m:
         "risk": "HIGH",
     })
 
+# Docker: docker pull/run from untrusted registry
+docker_m = re.search(r"(?:^|[;\s&|]+)docker\s+(?:pull|run)\s+(\S+)", cmd)
+if docker_m:
+    image = docker_m.group(1)
+    # Skip flags (e.g. docker run --rm ...)
+    if not image.startswith("-"):
+        trusted = ("gcr.io/", "ghcr.io/", "docker.io/library/", "mcr.microsoft.com/")
+        if not any(image.startswith(t) for t in trusted):
+            emit({"mode": "warn", "reason": f"Untrusted Docker image: {image}", "risk": "MEDIUM"})
+
+# VSCode: code --install-extension <id>
+vscode_m = re.search(r"code\s+--install-extension\s+(\S+)", cmd)
+if vscode_m:
+    ext_id = vscode_m.group(1)
+    emit({"mode": "warn", "reason": f"VSCode extension install: {ext_id}", "risk": "MEDIUM"})
+
 sys.exit(0)
 ' 2>/dev/null || echo "")
 
