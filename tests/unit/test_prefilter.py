@@ -51,6 +51,21 @@ class TestTyposquatting:
         result = check_typosquatting("torchtriton", "pypi")
         assert len(result) > 0
 
+    def test_go_full_module_path_typosquat(self):
+        """Go modules use full paths — compare last segment (e.g. viperr vs viper)."""
+        result = check_typosquatting("github.com/spf13/viperr", "go")
+        assert any("viper" in r for r in result)
+
+    def test_go_short_name_typosquat(self):
+        """Short Go package names should also be detected."""
+        result = check_typosquatting("viperr", "go")
+        assert any("viper" in r for r in result)
+
+    def test_go_exact_module_path_not_flagged(self):
+        """Exact match on last segment should not flag."""
+        result = check_typosquatting("github.com/spf13/viper", "go")
+        assert result == []
+
 
 class TestMetadataAnomalies:
     def test_normal_package(self):

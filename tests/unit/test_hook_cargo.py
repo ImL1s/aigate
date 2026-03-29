@@ -91,8 +91,39 @@ class TestCargoAdd:
         assert output["decision"] == "block"
 
     def test_cargo_add_with_features_flag(self):
-        """--features is a boolean-style flag, crate name should still be extracted."""
+        """--features takes a value; crate name should still be extracted, not 'derive' (I-2)."""
         r = _run_hook("cargo add serde --features derive", fake_aigate=BLOCKING_AIGATE)
+        output = json.loads(r.stdout.strip())
+        assert output["decision"] == "block"
+        assert "serde" in output["reason"]
+        assert "derive" not in output["reason"]
+
+    def test_cargo_add_with_short_features_flag(self):
+        """-F is short for --features; its value should be skipped (I-2)."""
+        r = _run_hook("cargo add tokio -F full", fake_aigate=BLOCKING_AIGATE)
+        output = json.loads(r.stdout.strip())
+        assert output["decision"] == "block"
+        assert "tokio" in output["reason"]
+        assert "full" not in output["reason"]
+
+    def test_cargo_add_with_rename_flag(self):
+        """--rename takes a value; should be skipped (I-2)."""
+        r = _run_hook("cargo add serde --rename my_serde", fake_aigate=BLOCKING_AIGATE)
+        output = json.loads(r.stdout.strip())
+        assert output["decision"] == "block"
+        assert "serde" in output["reason"]
+        assert "my_serde" not in output["reason"]
+
+    def test_cargo_add_no_default_features(self):
+        """--no-default-features is a boolean flag with no value (I-2)."""
+        r = _run_hook("cargo add serde --no-default-features", fake_aigate=BLOCKING_AIGATE)
+        output = json.loads(r.stdout.strip())
+        assert output["decision"] == "block"
+        assert "serde" in output["reason"]
+
+    def test_cargo_add_optional_flag(self):
+        """--optional is a boolean flag with no value (I-2)."""
+        r = _run_hook("cargo add serde --optional", fake_aigate=BLOCKING_AIGATE)
         output = json.loads(r.stdout.strip())
         assert output["decision"] == "block"
         assert "serde" in output["reason"]

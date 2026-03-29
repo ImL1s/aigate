@@ -23,7 +23,7 @@ SUSPICIOUS_PATTERNS: list[tuple[str, str]] = [
     (r"\.aws/", "AWS credentials access"),
     (r"\.env\b", ".env file access"),
     (r"ignore\s+(?:all\s+)?previous\s+instructions", "prompt injection attempt"),
-    (r"hardcode", "hardcoded credential reference"),
+    (r"(?:always|must|should)\s+hardcode", "hardcoded credential reference"),
     (r"http://\d+\.\d+\.\d+\.\d+", "raw IP URL (potential C2)"),
 ]
 

@@ -192,6 +192,24 @@ class TestPodInstall:
         assert output["decision"] == "block"
         assert "Podfile.lock" in output["reason"]
 
+    def test_pod_install_uses_cocoapods_ecosystem(self):
+        """pod install should pass ecosystem=cocoapods, not pub (M-3)."""
+        # Fake aigate that echoes all arguments in the reason field
+        eco_check_aigate = (
+            'echo \'{"decision":"malicious","exit_code":2,"reason":"args=\'"$*"\'"}\''
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / "Podfile.lock").write_text("PODS:\n  - Alamofire\n")
+            r = _run_hook(
+                "pod install",
+                fake_aigate=eco_check_aigate,
+                cwd=tmp_path,
+            )
+        output = json.loads(r.stdout.strip())
+        assert output["decision"] == "block"
+        assert "cocoapods" in output["reason"]
+
     def test_pod_install_no_lockfile_skips(self):
         """If Podfile.lock does not exist, should pass through silently."""
         with tempfile.TemporaryDirectory() as tmp:

@@ -261,11 +261,13 @@ def check_typosquatting(name: str, ecosystem: str) -> list[str]:
         "nuget": POPULAR_NUGET,
     }
     popular = popular_map.get(ecosystem, POPULAR_PYPI)
+    # For Go modules, compare only the last path segment (e.g. github.com/gin-gonic/gim → gim)
+    compare_name = name.rsplit("/", 1)[-1] if ecosystem == "go" else name
     matches = []
     for known in popular:
-        if name == known:
+        if compare_name == known:
             continue
-        similarity = SequenceMatcher(None, name.lower(), known.lower()).ratio()
+        similarity = SequenceMatcher(None, compare_name.lower(), known.lower()).ratio()
         if similarity >= TYPO_SIMILARITY_THRESHOLD:
             matches.append(f"{known} ({similarity:.0%})")
     return matches

@@ -169,7 +169,7 @@ if dart_m:
 pod_m = re.search(r"(?:^|[;\s&|]+)pod\s+(?:install|update)(?:\s|$)", cmd)
 if pod_m:
     if pathlib.Path("Podfile.lock").exists():
-        emit({"mode": "scan", "ecosystem": "pub", "lockfile": "Podfile.lock"})
+        emit({"mode": "scan", "ecosystem": "cocoapods", "lockfile": "Podfile.lock"})
     sys.exit(0)
 
 # Cargo: cargo add <crate>, cargo install <crate>
@@ -185,8 +185,10 @@ if cargo_m:
         if skip_next:
             skip_next = False
             continue
-        if tok in ("--git", "--path", "--registry", "--version", "--branch", "--tag", "--rev"):
+        if tok in ("--git", "--path", "--registry", "--version", "--branch", "--tag", "--rev", "--features", "-F", "--rename"):
             skip_next = True
+            continue
+        if tok in ("--no-default-features", "--optional"):
             continue
         if tok.startswith("-"):
             continue
@@ -272,7 +274,7 @@ if dotnet_m:
 
 # Detect: curl ... | sh, curl ... | bash, curl ... | zsh, wget ... | sh, wget ... | bash
 pipe_m = re.search(
-    r"(?:curl|wget)\s+[^|]+\|\s*(?:ba|z)?sh",
+    r"(?:curl|wget)\s+[^|]+\|\s*(?:sudo\s+)?(?:ba|z)?sh",
     cmd,
 )
 if pipe_m:
@@ -288,13 +290,42 @@ if pipe_m:
     })
 
 # Docker: docker pull/run from untrusted registry
-docker_m = re.search(r"(?:^|[;\s&|]+)docker\s+(?:pull|run)\s+(\S+)", cmd)
+docker_m = re.search(r"(?:^|[;\s&|]+)docker\s+(?:pull|run)\s+(.*?)$", cmd)
 if docker_m:
-    image = docker_m.group(1)
-    # Skip flags (e.g. docker run --rm ...)
-    if not image.startswith("-"):
+    # Iterate tokens after pull/run, skip flags and their values to find the image name
+    docker_tokens = docker_m.group(1).split()
+    image = None
+    docker_value_flags = {
+        "-p", "--publish", "-e", "--env", "--name", "--network", "--net",
+        "-v", "--volume", "-w", "--workdir", "--entrypoint", "--user", "-u",
+        "--hostname", "-h", "--memory", "-m", "--cpus", "--restart",
+        "--mount", "--label", "-l", "--env-file", "--log-driver",
+    }
+    skip_docker_next = False
+    for dtok in docker_tokens:
+        if skip_docker_next:
+            skip_docker_next = False
+            continue
+        if dtok in docker_value_flags:
+            skip_docker_next = True
+            continue
+        # Flags like --rm, -d, -it, --detach, --privileged (no value)
+        if dtok.startswith("-"):
+            # Handle combined short flags like -dit
+            # Check for --key=value style flags
+            if "=" in dtok:
+                continue
+            # For long flags with values joined by =, already handled above
+            continue
+        image = dtok
+        break
+
+    if image:
         trusted = ("gcr.io/", "ghcr.io/", "docker.io/library/", "mcr.microsoft.com/")
-        if not any(image.startswith(t) for t in trusted):
+        # Official Docker Hub images have no "/" (e.g. node:18, ubuntu, python:3.12)
+        image_without_tag = image.split(":")[0]
+        is_official = "/" not in image_without_tag
+        if not is_official and not any(image.startswith(t) for t in trusted):
             emit({"mode": "warn", "reason": f"Untrusted Docker image: {image}", "risk": "MEDIUM"})
 
 # VSCode: code --install-extension <id>
