@@ -99,6 +99,66 @@ POPULAR_CARGO: set[str] = {
     "lazy_static",
 }
 
+POPULAR_GEM: set[str] = {
+    "rails",
+    "rake",
+    "bundler",
+    "rspec",
+    "puma",
+    "sidekiq",
+    "devise",
+    "nokogiri",
+    "pg",
+    "redis",
+    "sinatra",
+    "rubocop",
+    "capistrano",
+    "rspec-rails",
+    "factory_bot",
+    "faker",
+}
+
+POPULAR_COMPOSER: set[str] = {
+    "laravel/framework",
+    "symfony/console",
+    "guzzlehttp/guzzle",
+    "monolog/monolog",
+    "phpunit/phpunit",
+    "doctrine/orm",
+    "league/flysystem",
+    "twig/twig",
+}
+
+POPULAR_GO: set[str] = {
+    "gin",
+    "mux",
+    "grpc",
+    "echo",
+    "fiber",
+    "cobra",
+    "viper",
+    "zap",
+    "logrus",
+    "gorm",
+    "sqlx",
+    "testify",
+    "wire",
+    "fx",
+}
+
+POPULAR_NUGET: set[str] = {
+    "Newtonsoft.Json",
+    "Serilog",
+    "AutoMapper",
+    "MediatR",
+    "Dapper",
+    "FluentValidation",
+    "Polly",
+    "Moq",
+    "xunit",
+    "NUnit",
+}
+
 # Known dangerous patterns in install scripts
 DANGEROUS_PATTERNS: list[re.Pattern] = [
     re.compile(r"\beval\s*\(", re.IGNORECASE),
@@ -195,6 +255,10 @@ def check_typosquatting(name: str, ecosystem: str) -> list[str]:
         "pypi": POPULAR_PYPI,
         "npm": POPULAR_NPM,
         "cargo": POPULAR_CARGO,
+        "gem": POPULAR_GEM,
+        "composer": POPULAR_COMPOSER,
+        "go": POPULAR_GO,
+        "nuget": POPULAR_NUGET,
     }
     popular = popular_map.get(ecosystem, POPULAR_PYPI)
     matches = []

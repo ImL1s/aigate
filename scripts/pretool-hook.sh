@@ -195,6 +195,79 @@ if cargo_m:
         emit({"mode": "check", "ecosystem": "cargo", "packages": packages})
     sys.exit(0)
 
+# Ruby: gem install <gem>, bundle add <gem>, bundle install
+gem_m = re.search(r"(?:^|[;\s&|]+)(?:gem\s+install|bundle\s+(?:add|install))(?:\s+(.*))?$", cmd)
+if gem_m:
+    args = (gem_m.group(1) or "").strip()
+    packages = []
+    skip_next = False
+    for tok in args.split():
+        if skip_next:
+            skip_next = False
+            continue
+        if tok in ("--version", "-v", "--source", "--platform", "--group", "-g"):
+            skip_next = True
+            continue
+        if tok.startswith("-"):
+            continue
+        packages.append(tok)
+    if packages:
+        emit({"mode": "check", "ecosystem": "gem", "packages": packages})
+    elif "bundle install" in cmd:
+        if pathlib.Path("Gemfile.lock").exists():
+            emit({"mode": "scan", "ecosystem": "gem", "lockfile": "Gemfile.lock"})
+    sys.exit(0)
+
+# PHP: composer require <pkg>, composer install
+composer_m = re.search(r"(?:^|[;\s&|]+)composer\s+(require|install)(?:\s+(.*))?$", cmd)
+if composer_m:
+    subcmd = composer_m.group(1)
+    args = (composer_m.group(2) or "").strip()
+    if subcmd == "require" and args:
+        packages = [t for t in args.split() if not t.startswith("-")]
+        if packages:
+            emit({"mode": "check", "ecosystem": "composer", "packages": packages})
+    elif subcmd == "install":
+        if pathlib.Path("composer.lock").exists():
+            emit({"mode": "scan", "ecosystem": "composer", "lockfile": "composer.lock"})
+    sys.exit(0)
+
+# Go: go get <pkg>, go install <pkg>
+go_m = re.search(r"(?:^|[;\s&|]+)go\s+(?:get|install)(?:\s+(.*))?$", cmd)
+if go_m:
+    args = (go_m.group(1) or "").strip()
+    packages = []
+    for tok in args.split():
+        if tok.startswith("-"):
+            continue
+        name = tok.split("@")[0]
+        if name:
+            packages.append(name)
+    if packages:
+        emit({"mode": "check", "ecosystem": "go", "packages": packages})
+    sys.exit(0)
+
+# .NET: dotnet add [project] package <pkg>
+dotnet_m = re.search(r"(?:^|[;\s&|]+)dotnet\s+add\s+(?:\S+\s+)?package(?:\s+(.*))?$", cmd)
+if dotnet_m:
+    args = (dotnet_m.group(1) or "").strip()
+    packages = []
+    skip_next = False
+    for tok in args.split():
+        if skip_next:
+            skip_next = False
+            continue
+        if tok in ("--version", "-v", "--source", "--framework", "-f", "--prerelease"):
+            if tok != "--prerelease":
+                skip_next = True
+            continue
+        if tok.startswith("-"):
+            continue
+        packages.append(tok)
+    if packages:
+        emit({"mode": "check", "ecosystem": "nuget", "packages": packages})
+    sys.exit(0)
+
 sys.exit(0)
 ' 2>/dev/null || echo "")
 
