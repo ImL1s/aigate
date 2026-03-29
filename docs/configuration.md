@@ -8,6 +8,14 @@ aigate is configured via `.aigate.yml`. It searches: CWD → parent directories 
 aigate init  # creates .aigate.yml in current directory
 ```
 
+`aigate init` auto-detects installed AI tools (Claude, Gemini, Codex, Ollama) and enables only the backends found on your system.
+
+### Diagnosing Setup
+
+```bash
+aigate doctor  # checks backend availability, config validity, and connectivity
+```
+
 ## Full Example
 
 ```yaml
@@ -33,6 +41,21 @@ models:
     enabled: false
     options:
       base_url: http://localhost:11434
+
+  # - name: codex          # OpenAI Codex CLI
+  #   backend: codex
+  #   model_id: o3
+  #   weight: 1.0
+  #   enabled: false
+
+  # - name: openai_compat  # Any OpenAI-compatible API (vLLM, Together, etc.)
+  #   backend: openai_compat
+  #   model_id: gpt-4o
+  #   weight: 0.8
+  #   enabled: false
+  #   options:
+  #     base_url: https://api.openai.com/v1
+  #     api_key_env: OPENAI_API_KEY
 
 # Voting thresholds
 thresholds:

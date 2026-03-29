@@ -60,6 +60,40 @@ External intelligence adds context:
 - **Web search**: Community reports of malicious behavior
 - **context7**: Official docs (what SHOULD this package do?)
 
+## Output Validation
+
+AI models can be manipulated by malicious code that includes prompt injection payloads. To defend against this, aigate validates model outputs:
+
+- If a model returns `verdict: safe` but its **reasoning** contains malicious keywords (e.g., "exfiltration", "credential theft", "backdoor", "reverse shell"), aigate automatically **upgrades the verdict to SUSPICIOUS**
+- An `output_validation(HIGH)` risk signal is added to flag the contradiction
+- This catches attacks where injected code manipulates the structured verdict field but cannot fully control the free-text reasoning
+
+This is implemented in `backends/base.py` via `_validate_safe_verdict()` and runs on every model response before consensus aggregation.
+
+## E2E Testing
+
+aigate includes a Docker-based end-to-end test sandbox that validates detection against synthetic malicious packages in a network-isolated environment.
+
+### Setup
+
+- **Docker compose** with two containers: a local `pypiserver` hosting synthetic packages, and a test runner
+- **Network isolation**: the runner container cannot reach the internet, only the local PyPI server
+- **8 synthetic malicious packages** built from fixtures covering all major attack types (typosquatting, credential theft, data exfiltration, obfuscated payloads, etc.)
+
+### Running E2E Tests
+
+```bash
+./scripts/run-e2e.sh
+```
+
+This script:
+1. Builds synthetic malicious packages from `tests/e2e/build_packages.py`
+2. Starts Docker containers (pypiserver + test runner)
+3. Runs E2E tests with `AIGATE_E2E=1` inside the container
+4. Tears down containers and reports results
+
+E2E tests are **skipped** in normal `pytest` runs. They only execute when `AIGATE_E2E=1` is set (automatically done by docker compose).
+
 ## Known Limitations
 
 | Limitation | Why | Mitigation |

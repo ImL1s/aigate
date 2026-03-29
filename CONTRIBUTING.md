@@ -55,6 +55,35 @@ We follow test-driven development. For every change:
 - Ruff enforced: line-length 100, rules E/F/I/N/W/UP
 - Async everywhere: use `async def` + `httpx.AsyncClient`
 
+## E2E Tests
+
+aigate has a Docker-based end-to-end test suite that runs detection against synthetic malicious packages in a network-isolated sandbox.
+
+### Running E2E Tests
+
+```bash
+./scripts/run-e2e.sh
+```
+
+This builds synthetic packages, starts a local `pypiserver` in Docker, and runs the E2E test suite inside a container with `AIGATE_E2E=1`.
+
+### Why E2E Tests Are Skipped in Normal Runs
+
+E2E tests require Docker and are gated by the `AIGATE_E2E=1` environment variable. Running `pytest tests/` without this variable will **skip** all E2E tests automatically (via `tests/e2e/conftest.py`).
+
+### Adding New Attack Fixtures
+
+1. Create a new synthetic package directory under `tests/e2e/` with the malicious pattern you want to test
+2. Add a build step in `tests/e2e/build_packages.py` to package it as a `.tar.gz`
+3. Add a test case in `tests/e2e/test_e2e_detection.py` that asserts the expected verdict and risk signals
+4. Run `./scripts/run-e2e.sh` to verify the fixture is detected correctly
+
+### Docker Sandbox Architecture
+
+- **pypiserver**: serves synthetic malicious packages on port 8080
+- **runner**: installs aigate and runs `pytest tests/e2e/` with `AIGATE_E2E=1` and `AIGATE_E2E_PYPI_URL=http://pypi:8080/simple/`
+- **Network isolation**: the runner cannot reach the internet, only the local PyPI server
+
 ## Code of Conduct
 
 Be respectful and constructive. We follow the spirit of the

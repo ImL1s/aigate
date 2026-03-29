@@ -1,18 +1,59 @@
 # AI Tool Integration Guide
 
-aigate can intercept `pip install` / `npm install` commands inside AI coding tools, blocking malicious packages before they execute.
+aigate can integrate with AI coding tools in two ways: LLM instructions (passive) and PreToolUse hooks (active interception).
 
-## Automatic Setup
+---
+
+## Mode 1: LLM Instructions (recommended)
+
+The simplest integration. `aigate init` generates instruction files that teach LLMs to run `aigate check` before installing packages. No hooks, no config files — just a markdown instruction the LLM reads.
 
 ```bash
-# Install hooks for all detected tools
+# Generate instruction files for all known tools
+aigate instructions
+
+# Generate for specific tools only
+aigate instructions --tool claude
+aigate instructions --tool gemini --tool cursor
+```
+
+### Generated Files
+
+| Tool | File | Format |
+|------|------|--------|
+| Claude Code | `CLAUDE.md` | Append |
+| Gemini CLI | `GEMINI.md` | Append |
+| Codex CLI | `AGENTS.md` | Append |
+| Cursor | `.cursorrules` | Append |
+| Windsurf | `.windsurfrules` | Append |
+| Cline | `.clinerules` | Append |
+| GitHub Copilot | `.github/copilot-instructions.md` | Append |
+| OpenCode | `CONVENTIONS.md` | Append |
+
+Each file receives a `## Package Security (aigate)` section instructing the LLM to run `aigate check <package>` before any install command and interpret exit codes (0=safe, 1=suspicious, 2=malicious).
+
+`aigate init` also generates these instruction files automatically when creating a new project config.
+
+---
+
+## Mode 2: PreToolUse Hooks
+
+Active interception — hooks run before the AI tool executes shell commands, blocking malicious packages automatically.
+
+### Automatic Setup
+
+```bash
+# Auto-detect installed tools and install hooks
+aigate install-hooks --auto
+
+# Install hooks for all known tools
 aigate install-hooks --tool all
 
 # Or specific tools
 aigate install-hooks --tool claude --tool gemini
 ```
 
-## Supported Tools
+### Supported Tools
 
 ### Claude Code
 
@@ -78,6 +119,28 @@ aigate install-hooks --tool claude --tool gemini
 auto-lint: true
 lint-cmd: "aigate scan requirements.txt --skip-ai"
 ```
+
+### OpenCode
+
+**Hook type:** Plugin (JavaScript)
+**Config dir:** `.opencode/plugins/`
+
+```bash
+aigate install-hooks --tool opencode
+```
+
+This generates a JavaScript plugin in `.opencode/plugins/aigate-security.js` that intercepts shell commands containing `pip install` or `npm install`.
+
+### Cline
+
+**Hook type:** Rules file
+**Config file:** `.clinerules`
+
+```bash
+aigate install-hooks --tool cline
+```
+
+This appends package security rules to `.clinerules`, instructing Cline to run `aigate check` before installing packages.
 
 ## How It Works
 

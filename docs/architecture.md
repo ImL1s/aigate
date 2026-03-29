@@ -44,7 +44,9 @@ User runs: aigate check <package>
         │ AI Consensus  │  consensus.py — parallel multi-model analysis
         │               │  • Claude Code (headless CLI)
         │               │  • Gemini CLI (headless)
+        │               │  • Codex CLI (headless)
         │               │  • Ollama (local HTTP)
+        │               │  • OpenAI-compat (any HTTP chat/completions API)
         │               │  • Weighted voting + disagreement detection
         └──────┬───────┘
                │
@@ -72,25 +74,38 @@ User runs: aigate check <package>
 | **Reporters** | `reporters/` | Output formatting. Terminal (Rich) and JSON |
 | **Hooks** | `hooks/` | Package manager wrappers. `aigate-pip`, `aigate-npm` |
 | **Hook Installer** | `hook_installer.py` | Install PreToolUse hooks into AI tool configs |
+| **Detect** | `detect.py` | Auto-detect installed AI backends and hook tools |
+| **Instructions** | `instructions.py` | Generate LLM instruction files (CLAUDE.md, GEMINI.md, etc.) |
+| **Config Validator** | `config_validator.py` | Validate `.aigate.yml` schema and values |
+| **Rate Limiter** | `rate_limiter.py` | Per-backend rate limiting for API calls |
+| **Log** | `log.py` | Structured logging configuration |
 
 ## Multi-Model Consensus
 
 ```
 Package source code
         │
-        ├──→ Claude Code ──→ {verdict, confidence, reasoning}
+        ├──→ Claude Code (CLI)      ──→ {verdict, confidence, reasoning}
         │
-        ├──→ Gemini CLI  ──→ {verdict, confidence, reasoning}
+        ├──→ Gemini CLI             ──→ {verdict, confidence, reasoning}
         │
-        └──→ Ollama       ──→ {verdict, confidence, reasoning}
-                                        │
-                                        ▼
-                               Voting Aggregator
-                               ├─ weighted_score = model_weight × confidence
-                               ├─ normalize across verdicts
-                               ├─ check disagreement (MALICIOUS + SAFE → NEEDS_REVIEW)
-                               └─ final verdict + combined risk signals
+        ├──→ Codex CLI              ──→ {verdict, confidence, reasoning}
+        │
+        ├──→ Ollama (HTTP)          ──→ {verdict, confidence, reasoning}
+        │
+        └──→ OpenAI-compat (HTTP)   ──→ {verdict, confidence, reasoning}
+                                                │
+                                                ▼
+                                       Voting Aggregator
+                                       ├─ weighted_score = model_weight × confidence
+                                       ├─ normalize across verdicts
+                                       ├─ check disagreement (MALICIOUS + SAFE → NEEDS_REVIEW)
+                                       └─ final verdict + combined risk signals
 ```
+
+**Dynamic consensus:** When only one model is enabled, aigate uses a single-model fast path — no voting needed, the result is used directly.
+
+**System/user message separation:** API-based backends (Ollama, OpenAI-compat) send structured `system` + `user` message pairs via the chat completions API. CLI-based backends (Claude, Gemini, Codex) concatenate into a single prompt.
 
 **Voting thresholds (configurable):**
 
@@ -116,3 +131,7 @@ Package source code
 | 1 | Suspicious / Needs human review |
 | 2 | Malicious — blocked |
 | 3 | Error |
+
+## Security: Output Validation
+
+AI model responses are validated before being trusted. If a model returns `verdict: safe` but its reasoning text contains malicious keywords (e.g., "exfiltration", "credential theft", "backdoor"), aigate automatically upgrades the verdict to `SUSPICIOUS` and adds an `output_validation(HIGH)` risk signal. This defends against prompt injection attacks where malicious code manipulates the verdict field but cannot fully control the reasoning.
