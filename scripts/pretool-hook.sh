@@ -141,6 +141,37 @@ npm_m = re.search(
 if npm_m:
     parse_npm(npm_m.group(1), (npm_m.group(3) or "").strip())
 
+# fvm install — Flutter SDK version management, always safe → skip
+fvm_m = re.search(r"(?:^|[;\s&|]+)fvm\s+install", cmd)
+if fvm_m:
+    sys.exit(0)
+
+# Dart/Flutter: dart pub add <pkg>, flutter pub add <pkg>, dart pub get, flutter pub get
+dart_m = re.search(
+    r"(?:^|[;\s&|]+)(?:dart|flutter)\s+pub\s+(add|get)(?:\s+(.*))?$",
+    cmd,
+)
+if dart_m:
+    subcmd = dart_m.group(1)
+    args = (dart_m.group(2) or "").strip()
+    if subcmd == "add" and args:
+        # `flutter pub add http` or `flutter pub add --dev mockito`
+        packages = [a for a in args.split() if not a.startswith("-")]
+        if packages:
+            emit({"mode": "check", "ecosystem": "pub", "packages": packages})
+    else:
+        # bare `flutter pub get` / `dart pub get` — scan pubspec.lock if exists
+        if pathlib.Path("pubspec.lock").exists():
+            emit({"mode": "scan", "ecosystem": "pub", "lockfile": "pubspec.lock"})
+    sys.exit(0)
+
+# CocoaPods: pod install, pod update
+pod_m = re.search(r"(?:^|[;\s&|]+)pod\s+(?:install|update)(?:\s|$)", cmd)
+if pod_m:
+    if pathlib.Path("Podfile.lock").exists():
+        emit({"mode": "scan", "ecosystem": "pub", "lockfile": "Podfile.lock"})
+    sys.exit(0)
+
 sys.exit(0)
 ' 2>/dev/null || echo "")
 
