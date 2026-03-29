@@ -119,12 +119,14 @@ See the main [README](../README.md) for full configuration options.
 
 ## Exit Codes
 
-| Code | Meaning |
-|------|---------|
-| 0    | Safe |
-| 1    | Needs review |
-| 2    | Malicious package blocked, install aborted |
-| 3    | Error while analyzing |
+The wrapper only **blocks** on malicious packages (exit 2). For suspicious results or analysis errors, it prints a warning but still returns the real package manager's exit code so installation is not interrupted.
+
+| Code | Meaning | Behavior |
+|------|---------|----------|
+| 0    | Safe | Install proceeds normally |
+| 1    | Suspicious | Warning printed, install proceeds (returns real PM exit code) |
+| 2    | Malicious | **Install aborted** |
+| 3    | Analysis error | Warning printed, install proceeds (returns real PM exit code) |
 
 ## How It Differs from `--ignore-scripts`
 
@@ -134,6 +136,6 @@ See the main [README](../README.md) for full configuration options.
 | Detects typosquatting | No | Yes |
 | Detects obfuscated code | No | Yes |
 | AI-powered analysis | No | Yes |
-| Blocks before download | No | Yes (blocks before real install) |
+| Blocks before real install | No | Yes (downloads tarball for analysis, then blocks if malicious) |
 
 For maximum security, use both together.

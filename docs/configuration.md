@@ -13,7 +13,7 @@ aigate init  # creates .aigate.yml in current directory
 ### Diagnosing Setup
 
 ```bash
-aigate doctor  # checks backend availability, config validity, and connectivity
+aigate doctor  # detects backend binaries on PATH and reports their status
 ```
 
 ## Full Example
@@ -61,7 +61,7 @@ models:
 thresholds:
   malicious: 0.6       # Block if weighted malicious score > 0.6
   suspicious: 0.5      # Warn if weighted suspicious score > 0.5
-  disagreement: 0.4    # Flag for human review if models disagree
+  disagreement: 0.4    # Reserved — disagreement is currently detected when SAFE and MALICIOUS verdicts coexist, regardless of this value
 
 # Skip analysis for trusted packages
 whitelist:
@@ -79,6 +79,7 @@ blocklist:
 ecosystems:
   - pypi
   - npm
+  - pub       # pub.dev (Dart/Flutter)
 
 # Cache settings
 cache_dir: ~/.aigate/cache

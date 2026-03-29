@@ -66,7 +66,7 @@ Fast static analysis without AI — catches typosquatting, suspicious patterns, 
 
 ### Full AI analysis
 
-Enable multi-model consensus (requires `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` in repo secrets, or CLI tools installed on runner).
+Enable multi-model consensus. CLI backends (Claude, Gemini, Codex) require the actual CLI binaries installed on the runner — API keys alone are not sufficient. The action does not install these CLIs automatically; you must add setup steps for each CLI you want to use.
 
 ```yaml
 - uses: ImL1s/aigate@main

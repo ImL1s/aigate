@@ -12,7 +12,7 @@ User runs: aigate check <package>
                │
                ▼
         ┌──────────────┐
-        │   Resolver    │  resolver.py — fetch metadata + source from PyPI/npm
+        │   Resolver    │  resolver.py — fetch metadata + source from PyPI/npm/pub.dev
         └──────┬───────┘
                │
                ▼
@@ -55,6 +55,7 @@ User runs: aigate check <package>
         │   Reporter    │  reporters/ — format and display results
         │               │  • Rich terminal (colored, tables)
         │               │  • JSON (CI/CD, machine-readable)
+        │               │  • SARIF (GitHub Code Scanning)
         └──────────────┘
 ```
 
@@ -64,14 +65,14 @@ User runs: aigate check <package>
 |--------|------|----------------|
 | **CLI** | `cli.py` | Entry point. Commands: `check`, `diff`, `scan`, `init`, `install-hooks`, `instructions`, `doctor` |
 | **Config** | `config.py` | Load `.aigate.yml` from CWD → parents → home. Merge defaults |
-| **Resolver** | `resolver.py` | Fetch package metadata from PyPI/npm. Download + extract source archives (never execute) |
+| **Resolver** | `resolver.py` | Fetch package metadata from PyPI/npm/pub.dev. Download + extract source archives (never execute) |
 | **Pre-Filter** | `prefilter.py` | Static analysis. Aims to filter 80%+ of safe packages without AI |
 | **Enrichment** | `enrichment/` | Optional intelligence layer. Fetches docs, CVEs, trust signals |
 | **Consensus** | `consensus.py` | Run multiple AI models in parallel. Aggregate weighted votes |
 | **Backends** | `backends/` | AI model adapters. Each implements `analyze(prompt) → str` |
 | **Cache** | `cache.py` | File-based analysis cache. SHA256 key, configurable TTL |
 | **Policy** | `policy.py` | Decision logic. Maps analysis results to verdicts + exit codes |
-| **Reporters** | `reporters/` | Output formatting. Terminal (Rich) and JSON |
+| **Reporters** | `reporters/` | Output formatting. Terminal (Rich), JSON, and SARIF |
 | **Hooks** | `hooks/` | Package manager wrappers. `aigate-pip`, `aigate-npm` |
 | **Hook Installer** | `hook_installer.py` | Install PreToolUse hooks into AI tool configs |
 | **Detect** | `detect.py` | Auto-detect installed AI backends and hook tools |

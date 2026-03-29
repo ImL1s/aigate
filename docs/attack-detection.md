@@ -21,12 +21,12 @@
 |---|------|-----------|-------------|-----------------|
 | 1 | **LiteLLM v1.82.7** | PyPI | CI/CD compromise → malicious update | .pth auto-exec, base64+exec, credential theft, HTTP exfil, token theft |
 | 2 | **crossenv** | npm | Typosquatting (cross-env) | postinstall script, .npmrc theft, network exfil |
-| 3 | **event-stream** | npm | Maintainer takeover → targeted backdoor | Hex-encoded require, new Function(), crypto usage |
-| 4 | **colors/faker** | npm | Protestware | Infinite loop pattern, install scripts |
+| 3 | **event-stream** (tested as flatmap-stream) | npm | Maintainer takeover → targeted backdoor | Hex-encoded require, new Function(), crypto usage |
+| 4 | **colors** (tested as colors, not faker) | npm | Protestware | Infinite loop pattern, install scripts |
 | 5 | **ua-parser-js** | npm | Account hijack → crypto miner | exec(), preinstall script, file download |
 | 6 | **ctx** | PyPI | Domain expiry hijack | setup.py exec, .aws theft, AWS_SECRET token, HTTP exfil |
 | 7 | **torchtriton** | PyPI | Typosquatting (triton) | setup.py exec, SSH key theft, system fingerprint, HTTP exfil |
-| 8 | **W4SP Stealer** | PyPI | Discord token theft | base64 obfuscation, high entropy, Discord webhook, browser cookie theft |
+| 8 | **W4SP Stealer** (tested as typesutil) | PyPI | Discord token theft | base64 obfuscation, high entropy, Discord webhook, browser cookie theft |
 
 ## Detection Layers
 

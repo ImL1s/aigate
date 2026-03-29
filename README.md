@@ -36,7 +36,7 @@ Existing tools only catch **known** vulnerabilities. aigate catches **unknown** 
 | Multi-model consensus | **3+ LLMs vote** | -- | -- | -- | -- |
 | Typosquatting detection | Yes | Yes | -- | -- | Yes |
 | Works without API keys | Yes (prefilter) | Yes | Yes | Yes | Freemium |
-| AI tool integration | **8 tools** | -- | -- | -- | GitHub App |
+| AI tool integration | **9 tools** | -- | -- | -- | GitHub App |
 | Ecosystems | PyPI, npm, pub | PyPI, npm, Go, Ruby | PyPI | 16+ | npm, PyPI |
 | Self-hostable | **100% open source** | Yes | Yes | Yes | Cloud only |
 
@@ -168,8 +168,8 @@ aigate auto-detects what you have and adjusts its strategy:
 | Backend | Type | Example |
 |---------|------|---------|
 | `claude` | CLI subprocess | Claude Code (`claude -p`) |
-| `gemini` | CLI subprocess | Gemini CLI (`gemini -p`) |
-| `codex` | CLI subprocess | Codex CLI (`codex -q`) |
+| `gemini` | CLI subprocess | Gemini CLI (stdin pipe) |
+| `codex` | CLI subprocess | Codex CLI (`codex exec -`) |
 | `ollama` | Local HTTP API | Any Ollama model (llama3, deepseek, etc.) |
 | `openai_compat` | HTTP API | **Any** OpenAI-compatible endpoint (OpenRouter, vLLM, llama.cpp) |
 
@@ -229,7 +229,7 @@ aigate uses **4 layers of prompt injection defense**:
 | Doc | Description |
 |-----|-------------|
 | [Architecture](docs/architecture.md) | System design, modules, consensus mechanism |
-| [AI Tool Integration](docs/ai-tool-integration.md) | All 8 tools, LLM instructions, hooks |
+| [AI Tool Integration](docs/ai-tool-integration.md) | All 9 tools, LLM instructions, hooks |
 | [Configuration](docs/configuration.md) | Full `.aigate.yml` reference |
 | [Attack Detection](docs/attack-detection.md) | Supported attacks, E2E testing |
 | [GitHub Action](docs/github-action.md) | CI/CD integration, SARIF output |

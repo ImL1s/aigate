@@ -44,6 +44,8 @@ Active interception — hooks run before the AI tool executes shell commands, bl
 
 ```bash
 # Auto-detect installed tools and install hooks
+# Note: --auto always includes file-based tools (cline, opencode)
+# regardless of whether their binaries are detected
 aigate install-hooks --auto
 
 # Install hooks for all known tools
@@ -67,14 +69,16 @@ aigate install-hooks --tool claude --tool gemini
       "matcher": "Bash",
       "hooks": [{
         "type": "command",
-        "command": "./scripts/pretool-hook.sh",
+        "command": "/absolute/path/to/scripts/pretool-hook.sh",
         "timeout": 30,
-        "statusMessage": "Scanning packages with aigate..."
+        "statusMessage": "aigate: scanning packages..."
       }]
     }]
   }
 }
 ```
+
+> **Note:** `aigate install-hooks` writes the resolved absolute path automatically. The example above is illustrative.
 
 ### Gemini CLI
 
@@ -86,15 +90,20 @@ aigate install-hooks --tool claude --tool gemini
   "hooks": {
     "BeforeTool": [{
       "matcher": "run_shell_command",
+      "sequential": true,
       "hooks": [{
         "type": "command",
-        "command": "./scripts/pretool-hook.sh",
-        "timeout": 30
+        "command": "/absolute/path/to/scripts/pretool-hook.sh",
+        "name": "aigate-package-validator",
+        "timeout": 5000,
+        "description": "Validates package installations via aigate"
       }]
     }]
   }
 }
 ```
+
+> **Note:** `aigate install-hooks` writes the resolved absolute path automatically.
 
 ### Codex CLI (OpenAI)
 
@@ -160,10 +169,10 @@ This appends package security rules to `.clinerules`, instructing Cline to run `
 | `npm install express` | Yes |
 | `yarn add react` | Yes |
 | `pnpm add vue` | Yes |
-| `pip install -r requirements.txt` | No (lockfile, not single package) |
+| `pip install -r requirements.txt` | Yes (converted to `aigate scan`) |
 | `pip install .` | No (local install) |
 | `pip install --upgrade pip` | No (system package) |
-| `npm install` | No (bare install, no package name) |
+| `npm install` | Yes (converted to `aigate scan` if a lockfile is found) |
 
 ## Fail-Open Design
 

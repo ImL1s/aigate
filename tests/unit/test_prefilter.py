@@ -41,6 +41,16 @@ class TestTyposquatting:
         result = check_typosquatting("expreess", "npm")
         assert len(result) > 0
 
+    def test_crossenv_typosquat(self):
+        """crossenv is a known typosquat of cross-env (npm)."""
+        result = check_typosquatting("crossenv", "npm")
+        assert any("cross-env" in r for r in result)
+
+    def test_torchtriton_typosquat(self):
+        """torchtriton is a known typosquat of pytorch-triton (pypi)."""
+        result = check_typosquatting("torchtriton", "pypi")
+        assert len(result) > 0
+
 
 class TestMetadataAnomalies:
     def test_normal_package(self):

@@ -47,6 +47,7 @@ POPULAR_PYPI: set[str] = {
     "langchain",
     "crewai",
     "dspy",
+    "pytorch-triton",
 }
 
 POPULAR_NPM: set[str] = {
@@ -70,6 +71,7 @@ POPULAR_NPM: set[str] = {
     "debug",
     "moment",
     "dayjs",
+    "cross-env",
 }
 
 # Known dangerous patterns in install scripts
