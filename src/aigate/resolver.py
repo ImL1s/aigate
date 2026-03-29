@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import re
 import tarfile
 import zipfile
 from pathlib import Path
@@ -18,6 +19,9 @@ logger = logging.getLogger(__name__)
 PYPI_API = "https://pypi.org/pypi"
 NPM_API = "https://registry.npmjs.org"
 PUB_API = "https://pub.dev/api/packages"
+
+# Override for E2E sandbox testing with local pypiserver
+_E2E_PYPI_URL = os.environ.get("AIGATE_E2E_PYPI_URL")
 MAX_ARCHIVE_SIZE = 50 * 1024 * 1024  # 50MB — reject larger archives to prevent OOM
 
 
@@ -352,3 +356,81 @@ def _extract_npm_repo(data: dict) -> str:
     if isinstance(repo, dict):
         return repo.get("url", "")
     return str(repo)
+
+
+# ---------------------------------------------------------------------------
+# E2E sandbox helpers — download from local pypiserver
+# ---------------------------------------------------------------------------
+
+_HREF_RE = re.compile(r'href="([^"]+\.tar\.gz)"', re.IGNORECASE)
+
+
+async def download_from_local_pypi(
+    package_name: str,
+    base_url: str | None = None,
+) -> dict[str, str]:
+    """Download a .tar.gz from a local pypiserver and extract text files.
+
+    pypiserver serves ``/simple/<package>/`` with an HTML page containing
+    ``<a href="...">`` links to archive files.  This helper fetches that
+    index, finds the first ``.tar.gz`` link, downloads it, and returns
+    extracted text files via ``_extract_archive()``.
+
+    Args:
+        package_name: The package name (used to build the index URL).
+        base_url: The pypiserver simple-index URL, e.g.
+            ``http://pypi:8080/simple/``.  Falls back to the
+            ``AIGATE_E2E_PYPI_URL`` env var.
+
+    Returns:
+        ``{filepath: content}`` dict, same as ``download_source()``.
+
+    Raises:
+        ValueError: If no base URL is available or no .tar.gz found.
+    """
+    url = base_url or _E2E_PYPI_URL
+    if not url:
+        raise ValueError("No local PyPI URL provided. Set AIGATE_E2E_PYPI_URL or pass base_url.")
+
+    # Ensure trailing slash on base, then append package name + /
+    index_url = url.rstrip("/") + "/" + package_name + "/"
+    logger.debug("Fetching local pypi index: %s", index_url)
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(index_url)
+        resp.raise_for_status()
+        html = resp.text
+
+    # Parse href links to .tar.gz files
+    matches = _HREF_RE.findall(html)
+    if not matches:
+        raise ValueError(f"No .tar.gz links found at {index_url}")
+
+    # Use the first .tar.gz link
+    tar_link = matches[0]
+
+    # pypiserver may serve relative links (just the filename) or absolute
+    if tar_link.startswith("http://") or tar_link.startswith("https://"):
+        download_url = tar_link
+    elif tar_link.startswith("/"):
+        # Absolute path — combine with origin
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        download_url = f"{parsed.scheme}://{parsed.netloc}{tar_link}"
+    else:
+        # Relative path — resolve against the index URL
+        download_url = index_url.rstrip("/") + "/" + tar_link
+
+    logger.debug("Downloading archive: %s", download_url)
+
+    async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+        resp = await client.get(download_url)
+        resp.raise_for_status()
+        content = resp.content
+        if len(content) > MAX_ARCHIVE_SIZE:
+            raise ValueError(f"Archive too large: {len(content)} bytes (max {MAX_ARCHIVE_SIZE})")
+
+    # The filename for _extract_archive needs to end with .tar.gz
+    archive_name = tar_link.rsplit("/", 1)[-1] if "/" in tar_link else tar_link
+    return _extract_archive(content, archive_name)
