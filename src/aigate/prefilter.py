@@ -317,7 +317,7 @@ def check_dangerous_patterns(
 ) -> list[str]:
     """Check source code for dangerous patterns."""
     signals = []
-    # S3: expanded install_files set — files that run at install/import time
+    # Files that run at install/import time — patterns here are HIGH risk
     install_files = {
         "setup.py",
         "setup.cfg",
@@ -325,25 +325,53 @@ def check_dangerous_patterns(
         "preinstall.js",
         "install.js",
         "prepare.js",
-        "conftest.py",
-        "__main__.py",
-        "Makefile",
-        "CMakeLists.txt",
     }
-    # Skip docs/readme — they describe API usage, not malicious behavior
-    skip_extensions = {".md", ".rst", ".txt", ".html", ".css"}
+    # Files that are HIGH only at package root (not in subdirs like tests/)
+    root_only_install_files = {"conftest.py", "__main__.py", "Makefile", "CMakeLists.txt"}
+    # Skip non-code files — docs, configs, CI pipelines describe usage, not malicious behavior
+    skip_extensions = {
+        ".md",
+        ".rst",
+        ".txt",
+        ".html",
+        ".css",
+        ".yml",
+        ".yaml",
+        ".toml",
+        ".cfg",
+        ".ini",
+        ".json",
+        ".lock",
+    }
+    # Skip CI/CD and config directories entirely
+    skip_dirs = {
+        ".github",
+        ".circleci",
+        ".gitlab",
+        ".travis",
+        ".jenkins",
+        "__pycache__",
+        "node_modules",
+        ".git",
+    }
 
     for filepath, content in source_files.items():
         filename = filepath.rsplit("/", 1)[-1] if "/" in filepath else filepath
         suffix = ("." + filename.rsplit(".", 1)[-1]).lower() if "." in filename else ""
         is_pth = filepath.endswith(".pth")
-        is_install_file = filename in install_files or is_pth
+        # Root-only install files: only HIGH if at package root (1 level deep like pkg-1.0/Makefile)
+        depth = filepath.count("/")
+        is_root_install = filename in root_only_install_files and depth <= 1
+        is_install_file = filename in install_files or is_pth or is_root_install
 
         # S2: .pth files auto-generate HIGH signal regardless of content
         if is_pth:
             signals.append(f"dangerous_pattern(HIGH): '.pth file' in install_script:{filepath}")
 
-        # Skip doc files, but never skip install files (e.g. CMakeLists.txt)
+        # Skip files in CI/config directories (never contain install-time attacks)
+        if any(part in skip_dirs for part in filepath.split("/")):
+            continue
+        # Skip non-code files, but never skip install files (e.g. CMakeLists.txt)
         if suffix in skip_extensions and not is_install_file:
             continue
 
@@ -423,12 +451,15 @@ def _calculate_risk_level(signals: Sequence[str]) -> RiskLevel:
         return RiskLevel.CRITICAL
     if high_count >= 1:
         return RiskLevel.HIGH
-    # Use unique pattern count + non-pattern signals (typosquat, metadata)
-    non_pattern_count = sum(1 for s in signals if "dangerous_pattern" not in s and "HIGH" not in s)
-    unique_total = medium_count + non_pattern_count
+    # Only HIGH and MEDIUM signals escalate risk. LOW signals are informational.
+    # Typosquat is always MEDIUM-equivalent.
+    typosquat_count = sum(1 for s in signals if "typosquat" in s)
+    escalating = medium_count + typosquat_count
 
-    if medium_count >= 3 or unique_total >= 5:
+    if medium_count >= 3 or escalating >= 4:
         return RiskLevel.HIGH
-    if medium_count >= 1 or unique_total >= 2:
+    if escalating >= 1:
         return RiskLevel.MEDIUM
+    if high_count == 0 and escalating == 0:
+        return RiskLevel.LOW
     return RiskLevel.LOW
