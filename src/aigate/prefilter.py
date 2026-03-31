@@ -249,21 +249,25 @@ def run_prefilter(
         )
         signals.extend(code_signals)
 
-    # 6. Compound signal detection (multi-indicator attack chains)
+    # 6. Compound signal detection — ONLY on install-time files
+    #    Normal source files (flask/cli.py, numpy/__init__.py) commonly have
+    #    exec() + .env + subprocess which are legitimate. Chain analysis only
+    #    makes sense for files that run at install/import time.
     if source_files:
-        per_file = _build_per_file_signals(source_files, package.ecosystem, config=config)
-        compound_signals = check_compound_signals(per_file)
-        signals.extend(compound_signals)
+        install_only = _filter_install_files(source_files)
+        if install_only:
+            per_file = _build_per_file_signals(install_only, package.ecosystem, config=config)
+            compound_signals = check_compound_signals(per_file)
+            signals.extend(compound_signals)
 
-    # 7. Behavior chain detection (API-agnostic attack pattern matching)
-    #    NOTE: compound.py (step 6) and behavior_chains.py (step 7) fire
-    #    independently as defense-in-depth.  compound.py matches rule TAG
-    #    co-occurrence from YAML rules; behavior_chains.py matches raw
-    #    BEHAVIOR CATEGORY co-occurrence.  Overlap is intentional — each
-    #    layer catches patterns the other may miss.
+    # 7. Behavior chain detection — ONLY on install-time files
+    #    Same reasoning: download→decode→execute in setup.py = attack.
+    #    download→decode→execute in regular library code = normal.
     if source_files:
-        chain_matches = detect_behavior_chains(source_files)
-        signals.extend(m.to_signal() for m in chain_matches)
+        install_only = _filter_install_files(source_files)
+        if install_only:
+            chain_matches = detect_behavior_chains(install_only)
+            signals.extend(m.to_signal() for m in chain_matches)
 
     # 8. Shannon entropy check for obfuscation
     if source_files:
@@ -448,6 +452,47 @@ def check_dangerous_patterns(
                 )
 
     return signals
+
+
+def _filter_install_files(source_files: dict[str, str]) -> dict[str, str]:
+    """Return only install-time files from source_files.
+
+    Install-time files (setup.py, postinstall.js, .pth, etc.) run automatically
+    during package installation or first import. Compound and behavior chain
+    analysis is restricted to these files to avoid false positives on normal
+    library code (e.g., flask using exec() + .env is legitimate).
+    """
+    install_names = {
+        "setup.py",
+        "setup.cfg",
+        "postinstall.js",
+        "preinstall.js",
+        "install.js",
+        "prepare.js",
+    }
+    result = {}
+    for filepath, content in source_files.items():
+        filename = filepath.rsplit("/", 1)[-1] if "/" in filepath else filepath
+        depth = filepath.count("/")
+        is_install = (
+            filename in install_names
+            or filepath.endswith(".pth")
+            or (
+                filename
+                in {
+                    "conftest.py",
+                    "__main__.py",
+                    "Makefile",
+                    "CMakeLists.txt",
+                    "__init__.py",
+                    "setup.js",
+                }
+                and depth <= 1
+            )
+        )
+        if is_install:
+            result[filepath] = content
+    return result
 
 
 def _build_per_file_signals(
