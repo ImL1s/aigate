@@ -14,3 +14,20 @@ rules:
     ecosystem: "*"
     description: "Browser open — can redirect to phishing or malicious URLs"
     tags: [obfuscation, browser]
+
+  - id: string-reverse-decode
+    pattern: '\.split\s*\(["\x27]{2}\)\s*\.reverse\s*\(\)\s*\.join'
+    severity: high
+    scope: any
+    ecosystem: "*"
+    description: "String reversal — common payload deobfuscation technique"
+    tags: [obfuscation, node]
+
+  - id: xor-decode
+    pattern: '\bxor\b|\^=?\s*(?:key|secret|constant|salt)'
+    severity: medium
+    scope: any
+    ecosystem: "*"
+    description: "XOR decoding — custom cipher used in malware"
+    tags: [obfuscation]
+    case_sensitive: true

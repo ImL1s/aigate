@@ -1,0 +1,48 @@
+rules:
+  - id: node-execsync
+    pattern: '\bexecSync\s*\('
+    severity: high
+    scope: any
+    ecosystem: "*"
+    description: "Node.js synchronous command execution"
+    tags: [execution, node, shell]
+
+  - id: node-spawn
+    pattern: '\bspawn\s*\('
+    severity: medium
+    scope: any
+    ecosystem: "*"
+    description: "Node.js child process spawn"
+    tags: [execution, node]
+
+  - id: node-fs-write
+    pattern: '\bfs\.(?:writeFileSync|writeFile|appendFileSync)\s*\('
+    severity: medium
+    scope: any
+    ecosystem: "*"
+    description: "Node.js file system write operation"
+    tags: [filesystem, node, persistence]
+
+  - id: node-https-get
+    pattern: '\bhttps?\.(?:get|request)\s*\('
+    severity: medium
+    scope: any
+    ecosystem: "*"
+    description: "Node.js native HTTP/HTTPS request"
+    tags: [exfiltration, network, node]
+
+  - id: node-buffer-base64
+    pattern: 'Buffer\.from\s*\([^)]*["\x27]base64["\x27]'
+    severity: medium
+    scope: any
+    ecosystem: "*"
+    description: "Base64 decoding via Buffer.from — common obfuscation technique"
+    tags: [obfuscation, node]
+
+  - id: node-process-env-write
+    pattern: 'process\.env\b.*='
+    severity: low
+    scope: any
+    ecosystem: "*"
+    description: "Environment variable modification"
+    tags: [credential_access, node]

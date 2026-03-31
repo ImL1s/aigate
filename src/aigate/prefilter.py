@@ -358,6 +358,7 @@ def check_dangerous_patterns(
         "Makefile",
         "CMakeLists.txt",
         "__init__.py",
+        "setup.js",
     }
     # Skip non-code files — docs, configs, CI pipelines describe usage, not malicious behavior
     skip_extensions = {

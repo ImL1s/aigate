@@ -1,0 +1,32 @@
+rules:
+  - id: macos-persistence-path
+    pattern: '/Library/(?:Caches|LaunchAgents|LaunchDaemons|Application Support)/[^"\s]+'
+    severity: high
+    scope: any
+    ecosystem: "*"
+    description: "macOS persistence path — LaunchAgent, LaunchDaemon, or Cache binary"
+    tags: [persistence, macos, filesystem]
+
+  - id: linux-tmp-executable
+    pattern: '/tmp/[^"\s]+\.(?:py|sh|bin|elf)'
+    severity: high
+    scope: any
+    ecosystem: "*"
+    description: "Executable dropped in /tmp — common malware staging"
+    tags: [persistence, linux, filesystem]
+
+  - id: windows-programdata
+    pattern: '%PROGRAMDATA%|%APPDATA%|%LOCALAPPDATA%'
+    severity: medium
+    scope: any
+    ecosystem: "*"
+    description: "Windows persistence path"
+    tags: [persistence, windows, filesystem]
+
+  - id: chmod-executable
+    pattern: 'chmod\s+\+x\b'
+    severity: medium
+    scope: any
+    ecosystem: "*"
+    description: "Making file executable — potential payload deployment"
+    tags: [execution, persistence]
