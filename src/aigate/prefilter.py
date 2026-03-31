@@ -8,6 +8,7 @@ from difflib import SequenceMatcher
 
 from .config import Config
 from .models import PackageInfo, PrefilterResult, RiskLevel
+from .rules.behavior_chains import detect_behavior_chains
 from .rules.compound import check_compound_signals
 from .rules.loader import Rule, load_rules
 from .rules.popular_packages import _read_cache
@@ -254,7 +255,12 @@ def run_prefilter(
         compound_signals = check_compound_signals(per_file)
         signals.extend(compound_signals)
 
-    # 7. Shannon entropy check for obfuscation
+    # 7. Behavior chain detection (API-agnostic attack pattern matching)
+    if source_files:
+        chain_matches = detect_behavior_chains(source_files)
+        signals.extend(m.to_signal() for m in chain_matches)
+
+    # 8. Shannon entropy check for obfuscation
     if source_files:
         entropy_signals = check_high_entropy(source_files)
         signals.extend(entropy_signals)
