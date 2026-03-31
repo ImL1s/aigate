@@ -49,9 +49,15 @@ class TestLitellmAttackDetected:
 
 
 class TestW4spAttackDetected:
-    """Simulate W4SP stealer — decode obfuscated payload, steal creds, exfiltrate."""
+    """Simulate W4SP stealer — decode obfuscated payload, steal creds, exfiltrate.
 
-    def test_encoded_dropper_and_credential_theft(self) -> None:
+    Note: after tightening download patterns (GET-only for HTTP libs),
+    this fixture no longer has a "download" behavior — requests.post is
+    exfiltration, not download.  Matched chains: obfuscated-execution,
+    credential-theft, staged-credential-theft.
+    """
+
+    def test_obfuscated_execution_and_credential_theft(self) -> None:
         source_files = {
             "w4sp-stealer/setup.py": (
                 "import base64, os, subprocess\n"
@@ -65,7 +71,7 @@ class TestW4spAttackDetected:
         }
         matches = detect_behavior_chains(source_files)
         chain_ids = {m.chain_id for m in matches}
-        assert "encoded-dropper" in chain_ids
+        assert "obfuscated-execution" in chain_ids
         assert "credential-theft" in chain_ids
 
 
@@ -235,6 +241,29 @@ class TestFullAttackChain:
         assert "full-attack-chain" in chain_ids
         full = next(m for m in matches if m.chain_id == "full-attack-chain")
         assert full.severity == "critical"
+
+
+class TestDownloadAndSaveNotFlagged:
+    """requests.get + open().write does NOT trigger dropper (no execute)."""
+
+    def test_download_and_save_not_flagged(self) -> None:
+        source_files = {
+            "mylib-1.0/mylib/download.py": (
+                "import requests\n"
+                "\n"
+                "def save_data(url: str, path: str) -> None:\n"
+                "    resp = requests.get(url)\n"
+                "    with open(path, 'w') as f:\n"
+                "        f.write(resp.text)\n"
+            ),
+        }
+        matches = detect_behavior_chains(source_files)
+        chain_ids = {m.chain_id for m in matches}
+        # download + write is NOT an attack chain — dropper requires execute
+        assert "dropper" not in chain_ids
+        assert all(
+            m.chain_id not in ("dropper", "encoded-dropper", "rat-deployment") for m in matches
+        )
 
 
 class TestSignalFormatForPrefilter:

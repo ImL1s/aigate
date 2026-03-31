@@ -40,7 +40,7 @@ rules:
     tags: [obfuscation, node]
 
   - id: node-process-env-write
-    pattern: 'process\.env\b.*='
+    pattern: 'process\.env\.\w+\s*='
     severity: low
     scope: any
     ecosystem: "*"

@@ -10,6 +10,11 @@ Key difference from ``compound.py``:
 - compound.py checks rule TAG co-occurrence (tied to specific YAML rules).
 - This module checks BEHAVIOR CATEGORY co-occurrence (API-agnostic), covering
   future unknown APIs as long as they fit a behavior category.
+
+Known limitation: patterns are matched against raw source text, so code inside
+comments and docstrings will also match.  This is acceptable for a pre-filter
+(false positives are cheaper than false negatives) but should be noted when
+triaging results.
 """
 
 from __future__ import annotations
@@ -25,9 +30,11 @@ BEHAVIORS: dict[str, dict] = {
     "download": {
         "description": "Fetching remote content",
         "patterns": [
-            r"\burllib\b.*\b(?:urlopen|urlretrieve)\b",
-            r"\brequests?\.\b(?:get|post)\b",
-            r"\bhttpx?\.\b(?:get|post)\b",
+            r"\burllib\.request\.urlopen\b",
+            r"\burlopen\s*\(",
+            r"\burllib\b.*\burlretrieve\b",
+            r"\brequests?\.\bget\b",
+            r"\bhttpx?\.\bget\b",
             r"\bhttps?\.\b(?:get|request)\b",
             r"\bfetch\s*\(",
             r"\bcurl\b",
@@ -54,7 +61,6 @@ BEHAVIORS: dict[str, dict] = {
         "description": "Writing to filesystem",
         "patterns": [
             r"\bopen\s*\(.*['\"]w",
-            r"\.write\s*\(",
             r"\bfs\.(?:writeFileSync|writeFile|appendFile)\b",
             r"\bshutil\.copy\b",
             r"\bos\.(?:rename|replace)\b",
@@ -66,7 +72,6 @@ BEHAVIORS: dict[str, dict] = {
             r"\bexec\s*\(",
             r"\beval\s*\(",
             r"\bexecSync\s*\(",
-            r"\bspawn\s*\(",
             r"\bsubprocess\b",
             r"\bos\.system\s*\(",
             r"\bos\.popen\s*\(",
@@ -96,7 +101,6 @@ BEHAVIORS: dict[str, dict] = {
         "patterns": [
             r"\b(?:requests?|httpx?)\.post\s*\(",
             r"urllib\.request\.urlopen.*data=",
-            r"\.send\s*\(",
             r"webhook",
             r"discord\.com/api/webhooks",
             r"telegram\.org/bot",
@@ -295,13 +299,11 @@ def detect_behavior_chains(source_files: dict[str, str]) -> list[BehaviorChainMa
             continue
 
         # Check each attack chain — most specific first (longest chain)
-        matched_chain_ids: set[str] = set()
         for chain_def in sorted(ATTACK_CHAINS, key=lambda c: len(c["chain"]), reverse=True):
             required = set(chain_def["chain"])
             if required.issubset(detected):
                 # Don't suppress sub-chains: report all matching chains
                 # so that severity escalation works correctly
-                matched_chain_ids.add(chain_def["id"])
                 all_matches.append(
                     BehaviorChainMatch(
                         chain_id=chain_def["id"],

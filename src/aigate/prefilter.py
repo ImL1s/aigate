@@ -256,6 +256,11 @@ def run_prefilter(
         signals.extend(compound_signals)
 
     # 7. Behavior chain detection (API-agnostic attack pattern matching)
+    #    NOTE: compound.py (step 6) and behavior_chains.py (step 7) fire
+    #    independently as defense-in-depth.  compound.py matches rule TAG
+    #    co-occurrence from YAML rules; behavior_chains.py matches raw
+    #    BEHAVIOR CATEGORY co-occurrence.  Overlap is intentional — each
+    #    layer catches patterns the other may miss.
     if source_files:
         chain_matches = detect_behavior_chains(source_files)
         signals.extend(m.to_signal() for m in chain_matches)
