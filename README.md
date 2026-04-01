@@ -278,7 +278,7 @@ Beyond package registries, aigate also warns on:
 ```bash
 git clone https://github.com/ImL1s/aigate.git && cd aigate
 uv venv && uv pip install -e ".[dev]"
-.venv/bin/python -m pytest tests/ -v     # 587 unit tests + 12 E2E (skipped)
+.venv/bin/python -m pytest tests/ -v     # 705 unit tests + 12 E2E (skipped)
 ./scripts/run-e2e.sh                      # full E2E in Docker sandbox
 ```
 

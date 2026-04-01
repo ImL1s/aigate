@@ -18,7 +18,7 @@ uv venv && uv pip install -e ".[dev]"
 ### Run tests and lint
 
 ```bash
-# Tests (587 unit + 12 E2E, ~41s)
+# Tests (705 unit + 12 E2E, ~41s)
 .venv/bin/python -m pytest tests/ -v
 
 # Lint
