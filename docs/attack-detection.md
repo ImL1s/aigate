@@ -14,6 +14,7 @@
 | Install-time Execution | ✅ setup.py/.pth/postinstall | ✅ | — | LiteLLM, crossenv, ctx |
 | Targeted Backdoor | ⚠️ Partial (obfuscation) | ✅ | — | event-stream |
 | Token/Secret Theft | ✅ ENV var patterns | ✅ | — | W4SP, crossenv |
+| Extension Disguise | ✅ Content sniffing + mismatch signal | ✅ | — | tests/integration/test_e2e_content_sniff.py |
 
 ## Verified Test Cases (8 fixtures)
 
@@ -155,6 +156,6 @@ AI rules files (`.cursorrules`, `.windsurfrules`) are scanned for hidden prompt 
 |-----------|-----|------------|
 | False positives on legitimate packages | Packages that use their own APIs (e.g., `requests.get()` in requests) trigger pattern matching | AI layer overrides; whitelist |
 | Cannot detect runtime-only attacks | Code that downloads payload after install, not during | AI can flag suspicious network setup |
-| Limited to text file analysis | Binary payloads, compiled extensions not scanned | Entropy check on text; future: binary analysis |
+| Limited to text file analysis | Binary payloads, compiled extensions not scanned | Entropy check on text; content sniffing catches disguised extensions; optional Magika integration |
 | AI prompt injection | Malicious code can try to manipulate AI verdict | `UNTRUSTED_PACKAGE_CODE` delimiters + multi-model consensus |
 | Newer ecosystems use prefilter only | Cargo, Gem, Composer, Go, NuGet don't have full resolvers yet | Typosquat + blocklist detection; full resolver planned |

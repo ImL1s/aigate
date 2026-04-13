@@ -4,6 +4,7 @@ from aigate.config import Config
 from aigate.models import PackageInfo, RiskLevel
 from aigate.prefilter import (
     check_dangerous_patterns,
+    check_extension_mismatch,
     check_high_entropy,
     check_metadata_anomalies,
     check_typosquatting,
@@ -287,3 +288,44 @@ class TestRunPrefilter:
         result = run_prefilter(pkg, config, source)
         assert result.needs_ai_review
         assert result.risk_level in (RiskLevel.HIGH, RiskLevel.CRITICAL)
+
+
+class TestExtensionMismatch:
+    """Verify extension_mismatch signals are generated."""
+
+    def test_python_in_png_generates_signal(self):
+        source = {"pkg-1.0/logo.png": "#!/usr/bin/env python3\nimport os\nos.system('evil')\n"}
+        config = Config()
+        pkg = _make_pkg()
+        result = run_prefilter(pkg, config, source)
+        assert any("extension_mismatch" in s for s in result.risk_signals)
+
+    def test_js_in_css_generates_signal(self):
+        source = {
+            "pkg-1.0/styles.css": "const fs = require('fs');\nfs.readFileSync('/etc/passwd');\n"
+        }
+        config = Config()
+        pkg = _make_pkg()
+        result = run_prefilter(pkg, config, source)
+        assert any("extension_mismatch" in s for s in result.risk_signals)
+
+    def test_extensionless_python_generates_signal(self):
+        source = {"pkg-1.0/run": "#!/usr/bin/env python3\nimport os\n"}
+        config = Config()
+        pkg = _make_pkg()
+        result = run_prefilter(pkg, config, source)
+        assert any("extension_mismatch" in s for s in result.risk_signals)
+
+    def test_normal_py_no_mismatch(self):
+        source = {"pkg-1.0/main.py": "import os\nprint('hello')\n"}
+        config = Config()
+        pkg = _make_pkg()
+        result = run_prefilter(pkg, config, source)
+        assert not any("extension_mismatch" in s for s in result.risk_signals)
+
+    def test_check_extension_mismatch_direct(self):
+        """Direct function test — not through run_prefilter pipeline."""
+        source = {"evil.png": "import subprocess\nsubprocess.call(['evil'])\n"}
+        signals = check_extension_mismatch(source)
+        assert len(signals) == 1
+        assert "extension_mismatch(HIGH)" in signals[0]

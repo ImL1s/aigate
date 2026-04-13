@@ -216,7 +216,15 @@ def _is_path_safe(name: str) -> bool:
 
 
 def _extract_archive(content: bytes, filename: str) -> dict[str, str]:
-    """Extract text files from tar.gz or zip/whl archive."""
+    """Extract text files from tar.gz or zip/whl archive.
+
+    Files matching the extension whitelist are extracted directly.
+    Files with unknown or no extension are content-sniffed: if they contain
+    code (Python, JS, shell, etc.), they are extracted too — catching
+    malicious files disguised with non-code extensions.
+    """
+    from .content_sniff import CODE_TYPES, sniff_content_type
+
     files: dict[str, str] = {}
     text_extensions = {
         ".dart",
@@ -238,6 +246,24 @@ def _extract_archive(content: bytes, filename: str) -> dict[str, str]:
     }
     max_file_size = 512 * 1024  # 512KB per file
 
+    def _should_extract(name: str, raw_bytes: bytes) -> tuple[bool, str | None]:
+        """Return (should_extract, decoded_text_or_None)."""
+        suffix = Path(name).suffix.lower()
+        if suffix in text_extensions:
+            try:
+                return True, raw_bytes.decode("utf-8", errors="replace")
+            except Exception:
+                return False, None
+        # Extension not in whitelist — try content sniffing
+        try:
+            text = raw_bytes.decode("utf-8", errors="replace")
+        except Exception:
+            return False, None
+        detected = sniff_content_type(text)
+        if detected and detected in CODE_TYPES:
+            return True, text
+        return False, None
+
     try:
         if filename.endswith((".tar.gz", ".tgz")):
             with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as tar:
@@ -246,13 +272,13 @@ def _extract_archive(content: bytes, filename: str) -> dict[str, str]:
                         continue
                     if not _is_path_safe(member.name):
                         continue
-                    suffix = Path(member.name).suffix.lower()
-                    if suffix not in text_extensions:
-                        continue
                     f = tar.extractfile(member)
                     if f:
                         try:
-                            files[member.name] = f.read().decode("utf-8", errors="replace")
+                            raw = f.read()
+                            ok, text = _should_extract(member.name, raw)
+                            if ok and text is not None:
+                                files[member.name] = text
                         except Exception:
                             pass
         elif filename.endswith((".whl", ".zip")):
@@ -262,13 +288,11 @@ def _extract_archive(content: bytes, filename: str) -> dict[str, str]:
                         continue
                     if not _is_path_safe(info.filename):
                         continue
-                    suffix = Path(info.filename).suffix.lower()
-                    if suffix not in text_extensions:
-                        continue
                     try:
-                        files[info.filename] = zf.read(info.filename).decode(
-                            "utf-8", errors="replace"
-                        )
+                        raw = zf.read(info.filename)
+                        ok, text = _should_extract(info.filename, raw)
+                        if ok and text is not None:
+                            files[info.filename] = text
                     except Exception:
                         pass
     except Exception:
@@ -299,7 +323,13 @@ SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv"}
 
 
 def read_local_source(path: Path) -> str:
-    """Read source code from a local file or directory for analysis."""
+    """Read source code from a local file or directory for analysis.
+
+    Files with skipped extensions or no extension are content-sniffed:
+    if they contain code, they are included anyway.
+    """
+    from .content_sniff import CODE_TYPES, sniff_content_type
+
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"Path not found: {path}")
@@ -315,10 +345,25 @@ def read_local_source(path: Path) -> str:
         root = Path(root_str)
         for fname in sorted(files):
             f = root / fname
-            if f.suffix in SKIP_EXTENSIONS:
-                continue
+            text: str | None = None  # will hold file content if already read
+
+            if f.suffix in SKIP_EXTENSIONS or not f.suffix:
+                # Sniff: read once, decide, reuse if code
+                try:
+                    text = f.read_text(errors="replace")
+                    detected = sniff_content_type(text[:4096])
+                    if detected not in CODE_TYPES:
+                        continue  # Not code, skip
+                    # Fall through — content is code despite extension
+                except (OSError, UnicodeDecodeError):
+                    continue
+
             try:
-                size = f.stat().st_size
+                if text is not None:
+                    # Already read during sniffing — reuse
+                    size = len(text.encode("utf-8", errors="replace"))
+                else:
+                    size = f.stat().st_size
                 cumulative_size += size
                 if cumulative_size > MAX_LOCAL_SOURCE_SIZE:
                     logger.warning(
@@ -326,7 +371,8 @@ def read_local_source(path: Path) -> str:
                         MAX_LOCAL_SOURCE_SIZE,
                     )
                     return "\n\n".join(parts)
-                text = f.read_text(errors="replace")
+                if text is None:
+                    text = f.read_text(errors="replace")
                 parts.append(f"# --- {f.relative_to(path)} ---\n{text}")
             except (OSError, UnicodeDecodeError):
                 continue

@@ -249,6 +249,11 @@ def run_prefilter(
         )
         signals.extend(code_signals)
 
+    # 5.5 Extension mismatch detection — catch disguised code files
+    if source_files:
+        mismatch_signals = check_extension_mismatch(source_files)
+        signals.extend(mismatch_signals)
+
     # 6. Compound signal detection — ONLY on install-time files
     #    Normal source files (flask/cli.py, numpy/__init__.py) commonly have
     #    exec() + .env + subprocess which are legitimate. Chain analysis only
@@ -451,6 +456,22 @@ def check_dangerous_patterns(
                     f"dangerous_pattern({risk}): '{rule.pattern.pattern}' in {label}:{filepath}"
                 )
 
+    return signals
+
+
+def check_extension_mismatch(source_files: dict[str, str]) -> list[str]:
+    """Detect files whose content type mismatches their extension.
+
+    Catches attacks where malicious code is disguised with a non-code
+    extension (e.g. Python saved as .png) or has no extension at all.
+    """
+    from .content_sniff import detect_extension_mismatch
+
+    signals: list[str] = []
+    for filepath, content in source_files.items():
+        mismatch = detect_extension_mismatch(filepath, content)
+        if mismatch:
+            signals.append(f"extension_mismatch(HIGH): {mismatch} in {filepath}")
     return signals
 
 
