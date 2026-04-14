@@ -19,11 +19,9 @@ pip install aigate && aigate init && aigate check crossenv --skip-ai
 # Exit code 2 — blocked. crossenv is a known typosquat of cross-env.
 ```
 
-<!-- TODO: Replace with actual demo GIF recorded via VHS
 <p align="center">
-  <img src="docs/assets/demo.gif" alt="aigate demo" width="700">
+  <img src="docs/assets/demo.gif" alt="aigate demo" width="800">
 </p>
--->
 
 ## Why aigate?
 
