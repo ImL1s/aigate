@@ -55,9 +55,7 @@ _BINARY_THRESHOLD = 0.10  # >10% non-text bytes = binary
 
 # Content types that represent executable/scriptable code.
 # Used by resolver and prefilter to decide which sniffed files to extract.
-CODE_TYPES: frozenset[str] = frozenset(
-    {"python", "javascript", "shell", "ruby", "perl", "php"}
-)
+CODE_TYPES: frozenset[str] = frozenset({"python", "javascript", "shell", "ruby", "perl", "php"})
 
 # Extensions that map to content types
 _EXT_TO_TYPE: dict[str, str] = {
@@ -142,11 +140,27 @@ def detect_extension_mismatch(filepath: str, content: str) -> str | None:
     Returns a human-readable mismatch description, or None if the types match
     or cannot be determined.
 
+    Uses Google Magika (AI-powered) when available, falling back to regex
+    heuristics.
+
     Args:
         filepath: The file path (e.g. "logo.png" or "LICENSE").
         content: The decoded text content of the file.
     """
+    # Cheap heuristics first, expensive Magika only as fallback.
+    # This avoids running AI model inference per-file in hot scanning loops
+    # (check_extension_mismatch, _scan_single_file, scan_directory_for_disguised_files).
     detected = sniff_content_type(content)
+    if detected is None:
+        # Heuristics couldn't determine — try AI-powered detection.
+        # Only trust Magika when it returns a recognized code type; generic
+        # labels like "txt"/"unknown" are not useful for mismatch detection.
+        try:
+            magika_result = magika_sniff(content.encode("utf-8"))
+            if magika_result in CODE_TYPES:
+                detected = magika_result
+        except Exception:
+            pass
     if detected is None:
         return None
 
@@ -181,7 +195,6 @@ def detect_extension_mismatch(filepath: str, content: str) -> str | None:
 # --------------------------------------------------------------------------
 
 
-
 @functools.lru_cache(maxsize=1)
 def _get_magika_instance():
     """Return a cached Magika instance (avoids reloading the model per call)."""
@@ -208,6 +221,7 @@ def magika_sniff(raw_bytes: bytes) -> str | None:
         mapping = {
             "python": "python",
             "javascript": "javascript",
+            "typescript": "javascript",
             "shell": "shell",
             "bash": "shell",
             "ruby": "ruby",

@@ -143,3 +143,151 @@ class TestMagikaImportFallback:
         # Even if magika IS installed, this just tests it doesn't crash
         result = magika_sniff(b"print('hello')")
         assert result is None or isinstance(result, str)
+
+
+class TestDetectExtensionMismatchMagikaIntegration:
+    """Verify heuristics-first, Magika-fallback detection pipeline."""
+
+    # --- Performance: heuristics first, Magika skipped when unnecessary ---
+
+    def test_heuristics_detect_skips_magika(self):
+        """When heuristics detect code, Magika is NOT called (performance)."""
+        from unittest.mock import patch
+
+        content = "#!/usr/bin/env python3\nimport os\n"
+        with patch("aigate.content_sniff.magika_sniff") as mock_magika:
+            result = detect_extension_mismatch("image.png", content)
+            mock_magika.assert_not_called()
+            assert result is not None
+            assert "python" in result
+
+    # --- Magika fallback: called only when heuristics return None ---
+
+    def test_magika_fallback_when_heuristics_fail(self):
+        """When heuristics return None, Magika is called as fallback."""
+        from unittest.mock import patch
+
+        content = "some obfuscated payload"
+        with (
+            patch("aigate.content_sniff.sniff_content_type", return_value=None),
+            patch("aigate.content_sniff.magika_sniff", return_value="python") as mock_magika,
+        ):
+            result = detect_extension_mismatch("image.png", content)
+            mock_magika.assert_called_once_with(content.encode("utf-8"))
+            assert result is not None
+            assert "python" in result
+
+    def test_both_return_none(self):
+        """When heuristics and Magika both return None, result is None."""
+        from unittest.mock import patch
+
+        with (
+            patch("aigate.content_sniff.sniff_content_type", return_value=None),
+            patch("aigate.content_sniff.magika_sniff", return_value=None),
+        ):
+            result = detect_extension_mismatch("image.png", "random data")
+            assert result is None
+
+    def test_magika_exception_graceful(self):
+        """When Magika raises, detection still returns None gracefully."""
+        from unittest.mock import patch
+
+        with (
+            patch("aigate.content_sniff.sniff_content_type", return_value=None),
+            patch("aigate.content_sniff.magika_sniff", side_effect=RuntimeError("boom")),
+        ):
+            result = detect_extension_mismatch("image.png", "random data")
+            assert result is None
+
+    def test_no_mismatch_when_magika_matches_extension(self):
+        """Magika detects python on a .py file — no mismatch."""
+        from unittest.mock import patch
+
+        with (
+            patch("aigate.content_sniff.sniff_content_type", return_value=None),
+            patch("aigate.content_sniff.magika_sniff", return_value="python"),
+        ):
+            result = detect_extension_mismatch("script.py", "obfuscated python")
+            assert result is None
+
+    # --- P1: Generic Magika labels must be ignored ---
+
+    def test_generic_txt_label_ignored(self):
+        """P1: Magika returning 'txt' is not in CODE_TYPES — ignored."""
+        from unittest.mock import patch
+
+        with (
+            patch("aigate.content_sniff.sniff_content_type", return_value=None),
+            patch("aigate.content_sniff.magika_sniff", return_value="txt"),
+        ):
+            result = detect_extension_mismatch("logo.png", "payload")
+            assert result is None  # Neither detected code
+
+    def test_generic_unknown_label_ignored(self):
+        """P1: Magika returning 'unknown' is not in CODE_TYPES — ignored."""
+        from unittest.mock import patch
+
+        with (
+            patch("aigate.content_sniff.sniff_content_type", return_value=None),
+            patch("aigate.content_sniff.magika_sniff", return_value="unknown"),
+        ):
+            result = detect_extension_mismatch("image.gif", "payload")
+            assert result is None
+
+    def test_heuristics_detect_despite_generic_magika(self):
+        """P1: Heuristics detect shell even if Magika would return 'txt'."""
+        content = "#!/bin/sh\necho hi\n"
+        # No mock needed — heuristics detect shell, Magika never called
+        result = detect_extension_mismatch("logo.png", content)
+        assert result is not None
+        assert "shell" in result
+
+    # --- P2: Unmapped code labels like 'typescript' handled via mapping ---
+
+    def test_magika_typescript_flags_mismatch_on_png(self):
+        """P2: Magika 'typescript' → mapped to 'javascript' → mismatch on .png."""
+        from unittest.mock import patch
+
+        with (
+            patch("aigate.content_sniff.sniff_content_type", return_value=None),
+            patch("aigate.content_sniff.magika_sniff", return_value="javascript"),
+        ):
+            result = detect_extension_mismatch("logo.png", "obfuscated ts")
+            assert result is not None
+            assert "javascript" in result
+
+    def test_heuristics_detect_js_despite_typescript_magika(self):
+        """P2: Heuristics detect JS first — Magika not needed."""
+        content = "import { readFile } from 'fs';\n"
+        result = detect_extension_mismatch("logo.png", content)
+        assert result is not None
+        assert "javascript" in result
+
+    def test_typescript_no_mismatch_on_ts_extension(self):
+        """P2: JS detected on a .ts file — no mismatch (.ts maps to javascript)."""
+        content = "import { readFile } from 'fs';\n"
+        result = detect_extension_mismatch("app.ts", content)
+        assert result is None
+
+
+class TestMagikaSniffMapping:
+    """Verify magika_sniff maps Magika labels to our type system."""
+
+    def test_typescript_mapped_to_javascript(self):
+        """P2: magika_sniff should map 'typescript' → 'javascript'."""
+        from unittest.mock import MagicMock, patch
+
+        mock_result = MagicMock()
+        mock_result.output.ct_label = "typescript"
+
+        mock_magika = MagicMock()
+        mock_magika.identify_bytes.return_value = mock_result
+
+        with (
+            patch("aigate.content_sniff._get_magika_instance", return_value=mock_magika),
+            patch.dict("sys.modules", {"magika": MagicMock()}),
+        ):
+            from aigate.content_sniff import magika_sniff
+
+            result = magika_sniff(b"const x: number = 1;")
+            assert result == "javascript"
