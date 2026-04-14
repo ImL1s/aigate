@@ -16,6 +16,11 @@ from .models import PackageInfo
 
 logger = logging.getLogger(__name__)
 
+
+class ExtractionError(Exception):
+    """Raised when archive extraction fails (corrupt, unsupported, etc.)."""
+
+
 PYPI_API = "https://pypi.org/pypi"
 NPM_API = "https://registry.npmjs.org"
 PUB_API = "https://pub.dev/api/packages"
@@ -264,14 +269,27 @@ def _extract_archive(content: bytes, filename: str) -> dict[str, str]:
             return True, text
         return False, None
 
+    max_total_size = 100 * 1024 * 1024  # 100MB cumulative extraction limit
+    cumulative_size = 0
+
     try:
         if filename.endswith((".tar.gz", ".tgz")):
             with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as tar:
                 for member in tar.getmembers():
+                    # Defense in depth: explicitly reject symlinks and hardlinks
+                    if member.issym() or member.islnk():
+                        continue
                     if not member.isfile() or member.size > max_file_size:
                         continue
                     if not _is_path_safe(member.name):
                         continue
+                    cumulative_size += member.size
+                    if cumulative_size > max_total_size:
+                        logger.warning(
+                            "Archive extraction limit reached (%d bytes), stopping",
+                            cumulative_size,
+                        )
+                        break
                     f = tar.extractfile(member)
                     if f:
                         try:
@@ -280,7 +298,7 @@ def _extract_archive(content: bytes, filename: str) -> dict[str, str]:
                             if ok and text is not None:
                                 files[member.name] = text
                         except Exception:
-                            pass
+                            logger.warning("Failed to extract %s", member.name)
         elif filename.endswith((".whl", ".zip")):
             with zipfile.ZipFile(io.BytesIO(content)) as zf:
                 for info in zf.infolist():
@@ -288,15 +306,22 @@ def _extract_archive(content: bytes, filename: str) -> dict[str, str]:
                         continue
                     if not _is_path_safe(info.filename):
                         continue
+                    cumulative_size += info.file_size
+                    if cumulative_size > max_total_size:
+                        logger.warning(
+                            "Archive extraction limit reached (%d bytes), stopping",
+                            cumulative_size,
+                        )
+                        break
                     try:
                         raw = zf.read(info.filename)
                         ok, text = _should_extract(info.filename, raw)
                         if ok and text is not None:
                             files[info.filename] = text
                     except Exception:
-                        pass
-    except Exception:
-        pass
+                        logger.warning("Failed to extract %s", info.filename)
+    except (tarfile.TarError, zipfile.BadZipFile, EOFError, OSError) as exc:
+        raise ExtractionError(f"Failed to extract {filename}: {exc}") from exc
 
     return files
 

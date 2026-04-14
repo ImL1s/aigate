@@ -8,6 +8,7 @@ import pytest
 from aigate.models import PackageInfo
 from aigate.resolver import (
     SKIP_DIRS,
+    ExtractionError,
     _extract_archive,
     _is_path_safe,
     download_source,
@@ -42,13 +43,112 @@ class TestPathSafe:
 
 
 class TestExtractArchive:
-    def test_empty_content(self):
-        result = _extract_archive(b"", "test.tar.gz")
-        assert result == {}
+    def test_empty_content_raises(self):
+        """Empty archive content should raise ExtractionError (fail-closed)."""
+        with pytest.raises(ExtractionError):
+            _extract_archive(b"", "test.tar.gz")
 
     def test_unsupported_format(self):
         result = _extract_archive(b"data", "test.rpm")
         assert result == {}
+
+    # --- TDD #1: Fail-closed extraction + decompression limit ---
+
+    @staticmethod
+    def _make_tar_gz(files: dict[str, bytes | str]) -> bytes:
+        """Create a tar.gz in memory with given {path: content} entries."""
+        import io as _io
+        import tarfile as _tf
+
+        buf = _io.BytesIO()
+        with _tf.open(fileobj=buf, mode="w:gz") as tar:
+            for path, content in files.items():
+                data = content.encode("utf-8") if isinstance(content, str) else content
+                info = _tf.TarInfo(name=path)
+                info.size = len(data)
+                tar.addfile(info, _io.BytesIO(data))
+        return buf.getvalue()
+
+    @staticmethod
+    def _make_zip(files: dict[str, bytes | str]) -> bytes:
+        """Create a zip in memory."""
+        import io as _io
+        import zipfile as _zf
+
+        buf = _io.BytesIO()
+        with _zf.ZipFile(buf, "w") as zf:
+            for path, content in files.items():
+                data = content.encode("utf-8") if isinstance(content, str) else content
+                zf.writestr(path, data)
+        return buf.getvalue()
+
+    def test_cumulative_size_limit_tar(self):
+        """Decompression bomb: many files under per-file limit but huge total."""
+        # 300 files × 400KB each = 120MB total > any reasonable limit
+        big_content = "x" * (400 * 1024)
+        archive = self._make_tar_gz({f"pkg/file{i}.py": big_content for i in range(300)})
+        result = _extract_archive(archive, "pkg.tar.gz")
+        # Should stop extracting before getting all 300 files
+        assert len(result) < 300
+
+    def test_cumulative_size_limit_zip(self):
+        """Decompression bomb: zip variant."""
+        big_content = "x" * (400 * 1024)
+        archive = self._make_zip({f"pkg/file{i}.py": big_content for i in range(300)})
+        result = _extract_archive(archive, "pkg.zip")
+        assert len(result) < 300
+
+    def test_corrupt_tar_raises_not_silent(self):
+        """Corrupt archive must raise ExtractionError, not return empty dict."""
+        with pytest.raises(ExtractionError):
+            _extract_archive(b"this is not a valid tar.gz", "pkg.tar.gz")
+
+    def test_corrupt_zip_raises_not_silent(self):
+        """Corrupt zip must raise, not silently return empty."""
+        with pytest.raises(ExtractionError):
+            _extract_archive(b"PK but corrupt data", "pkg.zip")
+
+    def test_tar_symlink_explicitly_rejected(self):
+        """Tar with symlink members must skip them (defense in depth)."""
+        import io as _io
+        import tarfile as _tf
+
+        buf = _io.BytesIO()
+        with _tf.open(fileobj=buf, mode="w:gz") as tar:
+            # Add a regular file
+            data = b"import os\n"
+            info = _tf.TarInfo(name="pkg/safe.py")
+            info.size = len(data)
+            tar.addfile(info, _io.BytesIO(data))
+            # Add a symlink pointing to /etc/passwd
+            sym = _tf.TarInfo(name="pkg/evil_link")
+            sym.type = _tf.SYMTYPE
+            sym.linkname = "/etc/passwd"
+            tar.addfile(sym)
+        archive = buf.getvalue()
+        result = _extract_archive(archive, "pkg.tar.gz")
+        assert "pkg/safe.py" in result
+        assert "pkg/evil_link" not in result
+
+    def test_tar_hardlink_explicitly_rejected(self):
+        """Tar with hardlink members must skip them."""
+        import io as _io
+        import tarfile as _tf
+
+        buf = _io.BytesIO()
+        with _tf.open(fileobj=buf, mode="w:gz") as tar:
+            data = b"print('hello')\n"
+            info = _tf.TarInfo(name="pkg/normal.py")
+            info.size = len(data)
+            tar.addfile(info, _io.BytesIO(data))
+            hl = _tf.TarInfo(name="pkg/hard_link")
+            hl.type = _tf.LNKTYPE
+            hl.linkname = "pkg/normal.py"
+            tar.addfile(hl)
+        archive = buf.getvalue()
+        result = _extract_archive(archive, "pkg.tar.gz")
+        assert "pkg/normal.py" in result
+        assert "pkg/hard_link" not in result
 
 
 class TestContentSniffingInArchive:
