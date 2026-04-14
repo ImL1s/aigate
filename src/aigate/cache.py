@@ -22,8 +22,8 @@ def _cache_dir(config_cache_dir: str) -> Path:
     return p
 
 
-def _cache_key(name: str, version: str, ecosystem: str) -> str:
-    raw = f"{ecosystem}:{name}:{version}"
+def _cache_key(name: str, version: str, ecosystem: str, provenance: str = "registry") -> str:
+    raw = f"{ecosystem}:{name}:{version}:{provenance}"
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
@@ -33,10 +33,11 @@ def get_cached(
     ecosystem: str,
     cache_dir: str,
     ttl_hours: int,
+    provenance: str = "registry",
 ) -> dict | None:
     """Return cached analysis dict or None if missing/expired."""
     d = _cache_dir(cache_dir)
-    key = _cache_key(name, version, ecosystem)
+    key = _cache_key(name, version, ecosystem, provenance)
     path = d / f"{key}.json"
     if not path.exists():
         logger.debug("Cache miss: %s/%s/%s", ecosystem, name, version)
@@ -60,6 +61,7 @@ def set_cached(
     ecosystem: str,
     report: AnalysisReport,
     cache_dir: str,
+    provenance: str = "registry",
 ) -> None:
     """Write analysis result to cache using atomic write.
 
@@ -67,7 +69,7 @@ def set_cached(
     This prevents concurrent readers from seeing partial/corrupt JSON.
     """
     d = _cache_dir(cache_dir)
-    key = _cache_key(name, version, ecosystem)
+    key = _cache_key(name, version, ecosystem, provenance)
     path = d / f"{key}.json"
     data = asdict(report)
     data["_cached_at"] = time.time()

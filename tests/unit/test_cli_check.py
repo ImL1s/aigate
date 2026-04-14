@@ -87,7 +87,7 @@ def test_check_cached_skip_ai_preserves_cached_decision(monkeypatch):
     monkeypatch.setattr("aigate.cli.resolve_package", fake_resolve_package)
     monkeypatch.setattr(
         "aigate.cli.get_cached",
-        lambda *_: {
+        lambda *_, **__: {
             "package": {
                 "name": "demo",
                 "version": "1.0.0",

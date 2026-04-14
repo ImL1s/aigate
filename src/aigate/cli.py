@@ -139,6 +139,7 @@ async def _check(
     config = Config.load()
     level = AnalysisLevel(level_str)
     start = time.monotonic()
+    provenance = "local" if local_path else "registry"
 
     if local_path:
         # Offline mode: skip registry, read local source directly
@@ -189,6 +190,7 @@ async def _check(
             ecosystem,
             config.cache_dir,
             config.cache_ttl_hours,
+            provenance=provenance,
         )
         if cached and skip_ai:
             total_ms = int((time.monotonic() - start) * 1000)
@@ -259,7 +261,9 @@ async def _check(
     )
 
     # 5. Cache result
-    set_cached(package.name, package.version, ecosystem, report, config.cache_dir)
+    set_cached(
+        package.name, package.version, ecosystem, report, config.cache_dir, provenance=provenance
+    )
 
     _print_report_and_exit(report, use_json, use_sarif)
 
@@ -290,11 +294,13 @@ def _scan_single_file(
             severity = "MEDIUM"
 
     if reasons:
-        findings.append({
-            "file": rel_path,
-            "severity": severity,
-            "reasons": reasons,
-        })
+        findings.append(
+            {
+                "file": rel_path,
+                "severity": severity,
+                "reasons": reasons,
+            }
+        )
 
 
 @main.command("scan-dir")
@@ -375,15 +381,14 @@ def scan_dir_cmd(ctx, directory: str, staged: bool, use_json: bool, verbose: boo
             "staged_only": staged,
             "findings": findings,
             "total_findings": len(findings),
-            "exit_code": 2 if any(f["severity"] == "HIGH" for f in findings)
+            "exit_code": 2
+            if any(f["severity"] == "HIGH" for f in findings)
             else (1 if findings else 0),
         }
         _print_json(payload)
     else:
         if findings:
-            console.print(
-                f"\n[bold red]Found {len(findings)} suspicious file(s):[/bold red]\n"
-            )
+            console.print(f"\n[bold red]Found {len(findings)} suspicious file(s):[/bold red]\n")
             for f in findings:
                 sev_color = {"HIGH": "red", "MEDIUM": "yellow", "LOW": "dim"}.get(
                     str(f["severity"]), "white"
@@ -394,9 +399,7 @@ def scan_dir_cmd(ctx, directory: str, staged: bool, use_json: bool, verbose: boo
         else:
             console.print("[green]No suspicious files found.[/green]")
 
-    exit_code = (
-        2 if any(f["severity"] == "HIGH" for f in findings) else (1 if findings else 0)
-    )
+    exit_code = 2 if any(f["severity"] == "HIGH" for f in findings) else (1 if findings else 0)
     if exit_code != 0:
         sys.exit(exit_code)
 

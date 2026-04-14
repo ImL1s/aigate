@@ -36,6 +36,25 @@ class TestCacheKey:
         k2 = _cache_key("pkg", "1.0", "npm")
         assert k1 != k2
 
+    # --- US-001: Provenance in cache key ---
+
+    def test_different_provenance_different_key(self):
+        """Local and registry results must NOT share cache keys."""
+        k_reg = _cache_key("requests", "2.32.0", "pypi", provenance="registry")
+        k_local = _cache_key("requests", "2.32.0", "pypi", provenance="local")
+        assert k_reg != k_local
+
+    def test_provenance_default_is_registry(self):
+        """Default provenance should be 'registry' for backwards compat."""
+        k_explicit = _cache_key("pkg", "1.0", "pypi", provenance="registry")
+        k_default = _cache_key("pkg", "1.0", "pypi")
+        assert k_explicit == k_default
+
+    def test_provenance_deterministic(self):
+        k1 = _cache_key("pkg", "1.0", "pypi", provenance="local")
+        k2 = _cache_key("pkg", "1.0", "pypi", provenance="local")
+        assert k1 == k2
+
 
 class TestSetAndGet:
     def test_roundtrip(self, tmp_path: Path):
@@ -73,3 +92,26 @@ class TestSetAndGet:
         report = _make_report()
         set_cached("testpkg", "1.0.0", "pypi", report, str(nested))
         assert nested.exists()
+
+    # --- US-001: Provenance isolation ---
+
+    def test_local_does_not_poison_registry(self, tmp_path: Path):
+        """A local scan result must not be returned for a registry lookup."""
+        report = _make_report()
+        set_cached("pkg", "1.0", "pypi", report, str(tmp_path), provenance="local")
+        result = get_cached("pkg", "1.0", "pypi", str(tmp_path), ttl_hours=1, provenance="registry")
+        assert result is None
+
+    def test_registry_does_not_poison_local(self, tmp_path: Path):
+        """A registry result must not be returned for a local lookup."""
+        report = _make_report()
+        set_cached("pkg", "1.0", "pypi", report, str(tmp_path), provenance="registry")
+        result = get_cached("pkg", "1.0", "pypi", str(tmp_path), ttl_hours=1, provenance="local")
+        assert result is None
+
+    def test_provenance_roundtrip(self, tmp_path: Path):
+        """Same provenance should roundtrip correctly."""
+        report = _make_report()
+        set_cached("pkg", "1.0", "pypi", report, str(tmp_path), provenance="local")
+        result = get_cached("pkg", "1.0", "pypi", str(tmp_path), ttl_hours=1, provenance="local")
+        assert result is not None
