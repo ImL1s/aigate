@@ -78,6 +78,11 @@ aigate scan requirements.txt --skip-ai
 # Scan local source offline
 aigate check mypackage --local ./src
 
+# Scan a directory for disguised/suspicious files (CI/CD PR gate, pre-commit)
+aigate scan-dir ./
+aigate scan-dir --staged          # only git staged files
+aigate scan-dir .claude/skills/ --json
+
 # SARIF output for GitHub Security tab
 aigate check requests --sarif
 ```
@@ -218,6 +223,7 @@ Tested against real-world attack patterns (synthetic reproductions in E2E Docker
 | curl\|sh pipe install | Install scripts | Warn on piping remote scripts to shell |
 | Untrusted Docker images | Typosquatted images | Warn on `docker pull`/`run` from untrusted registries |
 | AI agent vectors | MCP servers, skills, rules | Scan for prompt injection, reverse shells, credential access |
+| File disguise in repository | VS Code banner.png (2025) | `scan-dir` content sniffing detects code in wrong extensions |
 
 ## Extensible YAML Rules
 
@@ -270,15 +276,41 @@ Beyond package registries, aigate also warns on:
 | [Attack Detection](docs/attack-detection.md) | Supported attacks, E2E testing |
 | [GitHub Action](docs/github-action.md) | CI/CD integration, SARIF output |
 | [npm Integration](docs/npm-integration.md) | npm/yarn/pnpm setup |
+| [Pre-Commit Hook](#pre-commit-hook) | Pre-commit integration via `scan-dir` |
 | [Security Policy](SECURITY.md) | Vulnerability reporting |
 | [Contributing](CONTRIBUTING.md) | Dev setup, testing, E2E sandbox |
+
+## Pre-Commit Hook
+
+Use `scan-dir --staged` to catch disguised files before they enter your repo:
+
+```yaml
+# .pre-commit-config.yaml
+repos:
+  - repo: local
+    hooks:
+      - id: aigate-scan-dir
+        name: aigate scan-dir
+        entry: aigate scan-dir --staged
+        language: system
+        pass_filenames: false
+        always_run: true
+```
+
+Or as a manual git hook:
+
+```bash
+# .git/hooks/pre-commit
+#!/bin/sh
+aigate scan-dir --staged || exit 1
+```
 
 ## Contributing
 
 ```bash
 git clone https://github.com/ImL1s/aigate.git && cd aigate
 uv venv && uv pip install -e ".[dev]"
-.venv/bin/python -m pytest tests/ -v     # 768 unit & integration tests + 12 E2E (skipped)
+.venv/bin/python -m pytest tests/ -v     # 780+ unit & integration tests + 12 E2E (skipped)
 ./scripts/run-e2e.sh                      # full E2E in Docker sandbox
 ```
 

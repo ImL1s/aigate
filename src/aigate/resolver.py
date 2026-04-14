@@ -322,8 +322,12 @@ MAX_LOCAL_SOURCE_SIZE = MAX_ARCHIVE_SIZE  # 50MB — same limit as archive downl
 SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv"}
 
 
-def read_local_source(path: Path) -> str:
-    """Read source code from a local file or directory for analysis.
+def read_local_source_files(path: Path) -> dict[str, str]:
+    """Read source files from a local directory, returning per-file dict.
+
+    Returns ``{relative_path: content}`` — same format as
+    :func:`_extract_archive`, giving the prefilter per-file granularity for
+    extension-mismatch detection.
 
     Files with skipped extensions or no extension are content-sniffed:
     if they contain code, they are included anyway.
@@ -335,10 +339,10 @@ def read_local_source(path: Path) -> str:
         raise FileNotFoundError(f"Path not found: {path}")
 
     if path.is_file():
-        return path.read_text(errors="replace")
+        return {path.name: path.read_text(errors="replace")}
 
     cumulative_size = 0
-    parts: list[str] = []
+    result: dict[str, str] = {}
     for root_str, dirs, files in os.walk(path):
         # Skip hidden / non-essential directories in-place so os.walk won't descend
         dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
@@ -370,13 +374,24 @@ def read_local_source(path: Path) -> str:
                         "Local source size limit reached (%d bytes), stopping read",
                         MAX_LOCAL_SOURCE_SIZE,
                     )
-                    return "\n\n".join(parts)
+                    return result
                 if text is None:
                     text = f.read_text(errors="replace")
-                parts.append(f"# --- {f.relative_to(path)} ---\n{text}")
+                rel = str(f.relative_to(path))
+                result[rel] = text
             except (OSError, UnicodeDecodeError):
                 continue
-    return "\n\n".join(parts)
+    return result
+
+
+def read_local_source(path: Path) -> str:
+    """Read source code from a local file or directory as a single string.
+
+    This is a convenience wrapper around :func:`read_local_source_files`
+    that concatenates all files into a single string with headers.
+    """
+    files = read_local_source_files(path)
+    return "\n\n".join(f"# --- {name} ---\n{content}" for name, content in files.items())
 
 
 def _extract_repo_url(project_urls: dict[str, str] | None) -> str:

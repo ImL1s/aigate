@@ -509,7 +509,7 @@ class TestReadLocalSource:
         f = tmp_path / "script.py"
         f.write_text("x = 42")
         result = read_local_source(f)
-        assert result == "x = 42"
+        assert "x = 42" in result
 
     def test_nonexistent_path_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):

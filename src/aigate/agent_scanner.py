@@ -122,3 +122,38 @@ def scan_rules_file(content: str) -> list[str]:
         findings.append(f"possible base64-encoded payload: {match[:50]}...")
 
     return findings
+
+
+def scan_directory_for_disguised_files(directory: str) -> list[str]:
+    """Scan a directory tree for files with mismatched extensions.
+
+    Detects code disguised as non-code (e.g. Python in .png, shell in .md).
+    Useful for scanning skill folders, MCP server directories, or any untrusted
+    file tree.
+
+    Returns list of human-readable findings.
+    """
+    import os
+    from pathlib import Path
+
+    from .content_sniff import detect_extension_mismatch, sniff_content_type
+
+    findings: list[str] = []
+    root = Path(directory)
+    if not root.is_dir():
+        return findings
+
+    skip_dirs = {".git", "__pycache__", "node_modules", ".venv", "venv"}
+    for dir_path, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in skip_dirs]
+        for fname in files:
+            fpath = Path(dir_path) / fname
+            try:
+                content = fpath.read_text(errors="replace")
+            except (OSError, UnicodeDecodeError):
+                continue
+            mismatch = detect_extension_mismatch(fname, content[:4096])
+            if mismatch:
+                rel = str(fpath.relative_to(root))
+                findings.append(f"disguised file: {rel} — {mismatch}")
+    return findings

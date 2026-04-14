@@ -41,7 +41,7 @@ from .prefilter import run_prefilter
 from .reporters.json_reporter import JsonReporter
 from .reporters.sarif_reporter import SarifReporter
 from .reporters.terminal import TerminalReporter
-from .resolver import download_source, read_local_source, resolve_package
+from .resolver import download_source, read_local_source_files, resolve_package
 
 console = Console()
 
@@ -149,8 +149,7 @@ async def _check(
             version=pkg_version or "local",
             ecosystem=ecosystem,
         )
-        local_source = read_local_source(FilePath(local_path))
-        source_files = {"local": local_source}
+        source_files = read_local_source_files(FilePath(local_path))
     else:
         # 1. Resolve package
         with console.status(f"Resolving {package_name}..."):
@@ -263,6 +262,134 @@ async def _check(
     set_cached(package.name, package.version, ecosystem, report, config.cache_dir)
 
     _print_report_and_exit(report, use_json, use_sarif)
+
+
+def _scan_single_file(
+    rel_path: str,
+    content: str,
+    findings: list[dict[str, object]],
+) -> None:
+    """Scan a single file for extension mismatches and suspicious patterns."""
+    from .agent_scanner import scan_file_for_suspicious_patterns
+    from .content_sniff import detect_extension_mismatch
+
+    reasons: list[str] = []
+    severity = "LOW"
+
+    # 1. Extension mismatch check
+    mismatch = detect_extension_mismatch(rel_path, content)
+    if mismatch:
+        reasons.append(f"extension_mismatch: {mismatch}")
+        severity = "HIGH"
+
+    # 2. Suspicious pattern check
+    patterns = scan_file_for_suspicious_patterns(content)
+    for p in patterns:
+        reasons.append(f"suspicious_pattern: {p}")
+        if severity != "HIGH":
+            severity = "MEDIUM"
+
+    if reasons:
+        findings.append({
+            "file": rel_path,
+            "severity": severity,
+            "reasons": reasons,
+        })
+
+
+@main.command("scan-dir")
+@click.argument("directory", type=click.Path(exists=True), default=".")
+@click.option("--staged", is_flag=True, help="Only scan git staged files.")
+@click.option("--json", "use_json", is_flag=True, help="Output as JSON.")
+@click.option("--verbose", "-V", is_flag=True, help="Enable debug logging.", hidden=True)
+@click.option("--quiet", "-q", is_flag=True, help="Suppress non-error output.", hidden=True)
+@click.pass_context
+def scan_dir_cmd(ctx, directory: str, staged: bool, use_json: bool, verbose: bool, quiet: bool):
+    """Scan a directory for disguised or suspicious files.
+
+    Detects code files masquerading with wrong extensions (e.g. Python in .png),
+    extensionless scripts, and suspicious patterns.  Useful as a CI/CD PR gate
+    or pre-commit hook.
+
+    \b
+    Examples:
+        aigate scan-dir ./
+        aigate scan-dir --staged
+        aigate scan-dir .claude/skills/ --json
+    """
+    _apply_global_flags(ctx, verbose, quiet)
+
+    import json as json_mod
+    import subprocess
+    from pathlib import Path
+
+    from .resolver import read_local_source_files
+
+    target = Path(directory).resolve()
+    findings: list[dict[str, object]] = []
+
+    if staged:
+        # Get staged file list from git
+        try:
+            result = subprocess.run(
+                ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
+                capture_output=True,
+                text=True,
+                cwd=str(target),
+            )
+            if result.returncode != 0:
+                console.print("[red]Failed to get staged files. Not a git repo?[/red]")
+                sys.exit(3)
+            staged_files = [f.strip() for f in result.stdout.strip().split("\n") if f.strip()]
+        except FileNotFoundError:
+            console.print("[red]git not found on PATH[/red]")
+            sys.exit(3)
+
+        for rel_path in staged_files:
+            abs_path = target / rel_path
+            if not abs_path.is_file():
+                continue
+            try:
+                content = abs_path.read_text(errors="replace")
+            except (OSError, UnicodeDecodeError):
+                continue
+            _scan_single_file(rel_path, content, findings)
+    else:
+        source_files = read_local_source_files(target)
+        for rel_path, content in source_files.items():
+            _scan_single_file(rel_path, content, findings)
+
+    # Output
+    if use_json:
+        payload = {
+            "directory": str(target),
+            "staged_only": staged,
+            "findings": findings,
+            "total_findings": len(findings),
+            "exit_code": 2 if any(f["severity"] == "HIGH" for f in findings)
+            else (1 if findings else 0),
+        }
+        _print_json(payload)
+    else:
+        if findings:
+            console.print(
+                f"\n[bold red]Found {len(findings)} suspicious file(s):[/bold red]\n"
+            )
+            for f in findings:
+                sev_color = {"HIGH": "red", "MEDIUM": "yellow", "LOW": "dim"}.get(
+                    str(f["severity"]), "white"
+                )
+                console.print(f"  [{sev_color}]{f['severity']}[/{sev_color}] {f['file']}")
+                for r in f.get("reasons", []):
+                    console.print(f"       {r}")
+        else:
+            console.print("[green]No suspicious files found.[/green]")
+
+    exit_code = (
+        2 if any(f["severity"] == "HIGH" for f in findings) else (1 if findings else 0)
+    )
+    if exit_code != 0:
+        sys.exit(exit_code)
 
 
 @main.command()

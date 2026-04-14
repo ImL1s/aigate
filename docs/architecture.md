@@ -63,9 +63,9 @@ User runs: aigate check <package>
 
 | Module | File | Responsibility |
 |--------|------|----------------|
-| **CLI** | `cli.py` | Entry point. Commands: `check`, `diff`, `scan`, `init`, `install-hooks`, `instructions`, `doctor` |
+| **CLI** | `cli.py` | Entry point. Commands: `check`, `diff`, `scan`, `scan-dir`, `init`, `install-hooks`, `instructions`, `doctor` |
 | **Config** | `config.py` | Load `.aigate.yml` from CWD → parents → home. Merge defaults |
-| **Resolver** | `resolver.py` | Fetch package metadata from PyPI/npm/pub.dev. Download + extract source archives (never execute). Cargo/Gem/Composer/Go/NuGet use prefilter-only path |
+| **Resolver** | `resolver.py` | Fetch package metadata from PyPI/npm/pub.dev. Download + extract source archives (never execute). Content-sniffs disguised files during extraction. Cargo/Gem/Composer/Go/NuGet use prefilter-only path |
 | **Pre-Filter** | `prefilter.py` | Static analysis. Aims to filter 80%+ of safe packages without AI |
 | **Enrichment** | `enrichment/` | Optional intelligence layer. Fetches docs, CVEs, trust signals |
 | **Consensus** | `consensus.py` | Run multiple AI models in parallel. Aggregate weighted votes |
@@ -81,7 +81,8 @@ User runs: aigate check <package>
 | **Rule Loader** | `rules/loader.py` | Load and merge YAML rule files from builtin + user directories. Filter by ecosystem, disable by ID |
 | **Compound Detector** | `rules/compound.py` | Escalate severity when multiple signal categories appear in the same file (e.g. execution + credential access + exfiltration) |
 | **Popular Packages** | `rules/popular_packages.py` | Auto-fetch top 1000 PyPI/npm packages for typosquatting detection. 7-day cache with fallback |
-| **Agent Scanner** | `agent_scanner.py` | Scan MCP configs, agent skill files, and AI rules files for prompt injection and malicious patterns |
+| **Content Sniff** | `content_sniff.py` | Zero-dependency content-aware file type detection. Shebang, AST probes, and binary heuristics. Optional Magika AI layer |
+| **Agent Scanner** | `agent_scanner.py` | Scan MCP configs, agent skill files, and AI rules files for prompt injection, malicious patterns, and disguised code files |
 | **Config Validator** | `config_validator.py` | Validate `.aigate.yml` schema and values |
 | **Rate Limiter** | `rate_limiter.py` | Per-backend rate limiting for API calls |
 | **Log** | `log.py` | Structured logging configuration |
