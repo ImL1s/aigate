@@ -319,7 +319,6 @@ def scan_dir_cmd(ctx, directory: str, staged: bool, use_json: bool, verbose: boo
     """
     _apply_global_flags(ctx, verbose, quiet)
 
-    import json as json_mod
     import subprocess
     from pathlib import Path
 
@@ -347,6 +346,9 @@ def scan_dir_cmd(ctx, directory: str, staged: bool, use_json: bool, verbose: boo
 
         for rel_path in staged_files:
             abs_path = target / rel_path
+            # Guard against path traversal (e.g. submodule ../paths)
+            if not abs_path.resolve().is_relative_to(target):
+                continue
             if not abs_path.is_file():
                 continue
             try:

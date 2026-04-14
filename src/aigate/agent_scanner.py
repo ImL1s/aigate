@@ -136,16 +136,16 @@ def scan_directory_for_disguised_files(directory: str) -> list[str]:
     import os
     from pathlib import Path
 
-    from .content_sniff import detect_extension_mismatch, sniff_content_type
+    from .content_sniff import detect_extension_mismatch
 
     findings: list[str] = []
     root = Path(directory)
     if not root.is_dir():
         return findings
 
-    skip_dirs = {".git", "__pycache__", "node_modules", ".venv", "venv"}
+    from .resolver import SKIP_DIRS
     for dir_path, dirs, files in os.walk(root):
-        dirs[:] = [d for d in dirs if d not in skip_dirs]
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
         for fname in files:
             fpath = Path(dir_path) / fname
             try:
