@@ -339,7 +339,7 @@ def read_local_source_files(path: Path) -> dict[str, str]:
         raise FileNotFoundError(f"Path not found: {path}")
 
     if path.is_file():
-        return {path.name: path.read_text(errors="replace")}
+        return {str(path): path.read_text(errors="replace")}
 
     cumulative_size = 0
     result: dict[str, str] = {}

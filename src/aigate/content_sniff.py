@@ -9,6 +9,7 @@ For AI-powered detection, see the optional ``magika`` integration.
 
 from __future__ import annotations
 
+import functools
 import re
 from pathlib import Path
 
@@ -180,17 +181,26 @@ def detect_extension_mismatch(filepath: str, content: str) -> str | None:
 # --------------------------------------------------------------------------
 
 
+
+@functools.lru_cache(maxsize=1)
+def _get_magika_instance():
+    """Return a cached Magika instance (avoids reloading the model per call)."""
+    from magika import Magika  # type: ignore[import-untyped]
+
+    return Magika()
+
+
 def magika_sniff(raw_bytes: bytes) -> str | None:
     """Use Google Magika for AI-powered content type detection.
 
     Returns a content type string or None.  Requires ``pip install aigate[magika]``.
     """
     try:
-        from magika import Magika  # type: ignore[import-untyped]
+        import magika as _magika_mod  # noqa: F401  — availability check
     except ImportError:
         return None
 
-    m = Magika()
+    m = _get_magika_instance()
     result = m.identify_bytes(raw_bytes)
     if result and result.output and result.output.ct_label:
         label = result.output.ct_label.lower()

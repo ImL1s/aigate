@@ -312,6 +312,13 @@ def scan_dir_cmd(ctx, directory: str, staged: bool, use_json: bool, verbose: boo
     or pre-commit hook.
 
     \b
+    Exit codes:
+        0  No suspicious files found
+        1  Suspicious patterns detected (MEDIUM severity)
+        2  Disguised files detected (HIGH severity)
+        3  Git error (--staged mode only)
+
+    \b
     Examples:
         aigate scan-dir ./
         aigate scan-dir --staged
