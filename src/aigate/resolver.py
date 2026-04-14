@@ -30,26 +30,38 @@ _E2E_PYPI_URL = os.environ.get("AIGATE_E2E_PYPI_URL")
 MAX_ARCHIVE_SIZE = 50 * 1024 * 1024  # 50MB — reject larger archives to prevent OOM
 
 
-async def resolve_package(name: str, version: str | None, ecosystem: str) -> PackageInfo:
+async def resolve_package(
+    name: str,
+    version: str | None,
+    ecosystem: str,
+    client: httpx.AsyncClient | None = None,
+) -> PackageInfo:
     """Resolve package metadata from registry."""
     logger.debug("Resolving package: %s/%s (ecosystem=%s)", name, version or "latest", ecosystem)
     if ecosystem == "pypi":
-        return await _resolve_pypi(name, version)
+        return await _resolve_pypi(name, version, client=client)
     elif ecosystem == "npm":
-        return await _resolve_npm(name, version)
+        return await _resolve_npm(name, version, client=client)
     elif ecosystem == "pub":
-        return await _resolve_pub(name, version)
+        return await _resolve_pub(name, version, client=client)
     else:
         raise ValueError(f"Unsupported ecosystem: {ecosystem}")
 
 
-async def _resolve_pypi(name: str, version: str | None) -> PackageInfo:
+async def _resolve_pypi(
+    name: str, version: str | None, *, client: httpx.AsyncClient | None = None
+) -> PackageInfo:
     """Resolve from PyPI JSON API."""
     url = f"{PYPI_API}/{name}/json" if not version else f"{PYPI_API}/{name}/{version}/json"
-    async with httpx.AsyncClient(timeout=30) as client:
+    if client:
         resp = await client.get(url)
         resp.raise_for_status()
         data = resp.json()
+    else:
+        async with httpx.AsyncClient(timeout=30) as c:
+            resp = await c.get(url)
+            resp.raise_for_status()
+            data = resp.json()
 
     info = data["info"]
     latest_version = version or info.get("version", "")
@@ -69,13 +81,20 @@ async def _resolve_pypi(name: str, version: str | None) -> PackageInfo:
     )
 
 
-async def _resolve_npm(name: str, version: str | None) -> PackageInfo:
+async def _resolve_npm(
+    name: str, version: str | None, *, client: httpx.AsyncClient | None = None
+) -> PackageInfo:
     """Resolve from npm registry."""
     url = f"{NPM_API}/{name}"
-    async with httpx.AsyncClient(timeout=30) as client:
+    if client:
         resp = await client.get(url)
         resp.raise_for_status()
         data = resp.json()
+    else:
+        async with httpx.AsyncClient(timeout=30) as c:
+            resp = await c.get(url)
+            resp.raise_for_status()
+            data = resp.json()
 
     latest_version = version or data.get("dist-tags", {}).get("latest", "")
     version_data = data.get("versions", {}).get(latest_version, {})
@@ -98,13 +117,20 @@ async def _resolve_npm(name: str, version: str | None) -> PackageInfo:
     )
 
 
-async def _resolve_pub(name: str, version: str | None) -> PackageInfo:
+async def _resolve_pub(
+    name: str, version: str | None, *, client: httpx.AsyncClient | None = None
+) -> PackageInfo:
     """Resolve from pub.dev API."""
     url = f"{PUB_API}/{name}" if not version else f"{PUB_API}/{name}/versions/{version}"
-    async with httpx.AsyncClient(timeout=30) as client:
+    if client:
         resp = await client.get(url)
         resp.raise_for_status()
         data = resp.json()
+    else:
+        async with httpx.AsyncClient(timeout=30) as c:
+            resp = await c.get(url)
+            resp.raise_for_status()
+            data = resp.json()
 
     version_data = data.get("latest", {}) if not version else data
     pubspec = version_data.get("pubspec", {})
@@ -124,28 +150,42 @@ async def _resolve_pub(name: str, version: str | None) -> PackageInfo:
     )
 
 
-async def download_source(package: PackageInfo, dest: Path | None = None) -> dict[str, str]:
+async def download_source(
+    package: PackageInfo,
+    dest: Path | None = None,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, str]:
     """Download and extract package source, return {filepath: content} dict."""
     logger.debug(
         "Downloading source: %s==%s (%s)", package.name, package.version, package.ecosystem
     )
     if package.ecosystem == "pypi":
-        return await _download_pypi_source(package)
+        return await _download_pypi_source(package, client=client)
     elif package.ecosystem == "npm":
-        return await _download_npm_source(package)
+        return await _download_npm_source(package, client=client)
     elif package.ecosystem == "pub":
-        return await _download_pub_source(package)
+        return await _download_pub_source(package, client=client)
     else:
         raise ValueError(f"Unsupported ecosystem: {package.ecosystem}")
 
 
-async def _download_pypi_source(package: PackageInfo) -> dict[str, str]:
+async def _download_pypi_source(
+    package: PackageInfo, *, client: httpx.AsyncClient | None = None
+) -> dict[str, str]:
     """Download PyPI sdist/wheel and extract text files."""
     url = f"{PYPI_API}/{package.name}/{package.version}/json"
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.get(url)
-        resp.raise_for_status()
-        data = resp.json()
+
+    async def _get(u: str, **kw: object) -> httpx.Response:
+        if client:
+            return await client.get(u, **kw)  # type: ignore[arg-type]
+        async with httpx.AsyncClient(
+            timeout=kw.pop("timeout", 60), follow_redirects=kw.pop("follow_redirects", False)
+        ) as c:  # type: ignore[arg-type]
+            return await c.get(u)
+
+    resp = await _get(url, timeout=60)
+    resp.raise_for_status()
+    data = resp.json()
 
     # Prefer sdist over wheel (has setup.py)
     urls = data.get("urls", [])
@@ -159,56 +199,71 @@ async def _download_pypi_source(package: PackageInfo) -> dict[str, str]:
     if not download_url:
         return {}
 
-    async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
-        resp = await client.get(download_url)
-        resp.raise_for_status()
-        content = resp.content
-        if len(content) > MAX_ARCHIVE_SIZE:
-            raise ValueError(f"Archive too large: {len(content)} bytes (max {MAX_ARCHIVE_SIZE})")
+    resp = await _get(download_url, timeout=120, follow_redirects=True)
+    resp.raise_for_status()
+    content = resp.content
+    if len(content) > MAX_ARCHIVE_SIZE:
+        raise ValueError(f"Archive too large: {len(content)} bytes (max {MAX_ARCHIVE_SIZE})")
 
     return _extract_archive(content, download_url)
 
 
-async def _download_npm_source(package: PackageInfo) -> dict[str, str]:
+async def _download_npm_source(
+    package: PackageInfo, *, client: httpx.AsyncClient | None = None
+) -> dict[str, str]:
     """Download npm tarball and extract text files."""
     url = f"{NPM_API}/{package.name}/{package.version}"
-    async with httpx.AsyncClient(timeout=30) as client:
+    if client:
         resp = await client.get(url)
-        resp.raise_for_status()
-        data = resp.json()
+    else:
+        async with httpx.AsyncClient(timeout=30) as c:
+            resp = await c.get(url)
+    resp.raise_for_status()
+    data = resp.json()
 
     tarball_url = data.get("dist", {}).get("tarball")
     if not tarball_url:
         return {}
 
-    async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+    if client:
         resp = await client.get(tarball_url)
-        resp.raise_for_status()
-        content = resp.content
-        if len(content) > MAX_ARCHIVE_SIZE:
-            raise ValueError(f"Archive too large: {len(content)} bytes (max {MAX_ARCHIVE_SIZE})")
+    else:
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
+            resp = await c.get(tarball_url)
+    resp.raise_for_status()
+    content = resp.content
+    if len(content) > MAX_ARCHIVE_SIZE:
+        raise ValueError(f"Archive too large: {len(content)} bytes (max {MAX_ARCHIVE_SIZE})")
 
     return _extract_archive(content, tarball_url)
 
 
-async def _download_pub_source(package: PackageInfo) -> dict[str, str]:
+async def _download_pub_source(
+    package: PackageInfo, *, client: httpx.AsyncClient | None = None
+) -> dict[str, str]:
     """Download pub.dev tarball and extract text files."""
     url = f"{PUB_API}/{package.name}/versions/{package.version}"
-    async with httpx.AsyncClient(timeout=30) as client:
+    if client:
         resp = await client.get(url)
-        resp.raise_for_status()
-        data = resp.json()
+    else:
+        async with httpx.AsyncClient(timeout=30) as c:
+            resp = await c.get(url)
+    resp.raise_for_status()
+    data = resp.json()
 
     tarball_url = data.get("archive_url")
     if not tarball_url:
         return {}
 
-    async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+    if client:
         resp = await client.get(tarball_url)
-        resp.raise_for_status()
-        content = resp.content
-        if len(content) > MAX_ARCHIVE_SIZE:
-            raise ValueError(f"Archive too large: {len(content)} bytes (max {MAX_ARCHIVE_SIZE})")
+    else:
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
+            resp = await c.get(tarball_url)
+    resp.raise_for_status()
+    content = resp.content
+    if len(content) > MAX_ARCHIVE_SIZE:
+        raise ValueError(f"Archive too large: {len(content)} bytes (max {MAX_ARCHIVE_SIZE})")
 
     return _extract_archive(content, tarball_url)
 

@@ -471,11 +471,25 @@ async def _scan(
     if not use_json and not use_sarif:
         console.print(f"Scanning {len(packages)} packages from {lockfile} ({ecosystem})...")
 
-    results = []
-    for name, version in packages:
-        result = await _scan_dependency(name, version, ecosystem, config, skip_ai)
-        results.append(result)
-        if not use_json and not use_sarif:
+    import asyncio
+
+    scan_semaphore = asyncio.Semaphore(5)
+    shared_client = httpx.AsyncClient(timeout=120, follow_redirects=True)
+
+    async def _bounded_scan(name: str, version: str) -> dict:
+        async with scan_semaphore:
+            return await _scan_dependency(
+                name, version, ecosystem, config, skip_ai, client=shared_client
+            )
+
+    try:
+        tasks = [_bounded_scan(name, version) for name, version in packages]
+        results = list(await asyncio.gather(*tasks))
+    finally:
+        await shared_client.aclose()
+
+    if not use_json and not use_sarif:
+        for result in results:
             _print_scan_result(result)
 
     decisions = [result["decision"] for result in results]
@@ -1072,13 +1086,14 @@ async def _scan_dependency(
     ecosystem: str,
     config: Config,
     skip_ai: bool,
+    client: httpx.AsyncClient | None = None,
 ) -> dict:
     start = time.monotonic()
     package = PackageInfo(name=name, version=version, ecosystem=ecosystem)
 
     try:
-        package = await resolve_package(name, version, ecosystem)
-        source_files = await download_source(package)
+        package = await resolve_package(name, version, ecosystem, client=client)
+        source_files = await download_source(package, client=client)
     except Exception as e:
         report = AnalysisReport(
             package=package,

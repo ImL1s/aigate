@@ -641,3 +641,60 @@ class TestReadLocalSource:
         result = read_local_source(tmp_path)
         assert "Nothing to see here" not in result
         assert "print('hello')" in result
+
+
+# ---------------------------------------------------------------------------
+# US-003: httpx connection pooling — shared client support
+# ---------------------------------------------------------------------------
+
+
+class TestSharedHttpxClient:
+    """resolve_package and download_source accept an optional httpx client."""
+
+    async def test_resolve_package_accepts_client(self):
+        """resolve_package should accept a 'client' parameter."""
+        import inspect
+
+        sig = inspect.signature(resolve_package)
+        assert "client" in sig.parameters, "resolve_package must accept a 'client' parameter"
+
+    async def test_download_source_accepts_client(self):
+        """download_source should accept an optional client."""
+        import inspect
+
+        sig = inspect.signature(download_source)
+        assert "client" in sig.parameters, "download_source must accept a 'client' parameter"
+
+    async def test_shared_client_is_reused(self, monkeypatch):
+        """When a client is provided, no new httpx.AsyncClient is created."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_client = AsyncMock()
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "info": {
+                "name": "testpkg",
+                "version": "1.0.0",
+                "author": "Test",
+                "summary": "test",
+                "home_page": "",
+                "project_urls": {},
+                "requires_dist": None,
+            },
+            "urls": [],
+        }
+        mock_resp.raise_for_status = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_resp)
+
+        # Should NOT create a new client internally
+        original_init = __import__("httpx").AsyncClient.__init__
+        call_count = 0
+
+        def counting_init(self, *a, **kw):
+            nonlocal call_count
+            call_count += 1
+            return original_init(self, *a, **kw)
+
+        monkeypatch.setattr("httpx.AsyncClient.__init__", counting_init)
+        await resolve_package("testpkg", "1.0.0", "pypi", client=mock_client)
+        assert call_count == 0, "Should not create new AsyncClient when one is provided"

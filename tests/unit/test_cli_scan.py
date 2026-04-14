@@ -32,11 +32,13 @@ def test_scan_json_uses_full_prefilter_and_ai(monkeypatch, tmp_path):
 
     monkeypatch.setattr("aigate.cli.Config.load", lambda: Config())
 
-    async def fake_resolve_package(name: str, version: str, ecosystem: str) -> PackageInfo:
+    async def fake_resolve_package(
+        name: str, version: str, ecosystem: str, **kw: object
+    ) -> PackageInfo:
         assert (name, version, ecosystem) == ("demo", "1.0.0", "pypi")
         return package
 
-    async def fake_download_source(_: PackageInfo) -> dict[str, str]:
+    async def fake_download_source(_: PackageInfo, **kw: object) -> dict[str, str]:
         calls["download"] += 1
         return source_files
 
@@ -89,11 +91,11 @@ def test_scan_skip_ai_uses_prefilter_exit_code(monkeypatch, tmp_path):
 
     monkeypatch.setattr("aigate.cli.Config.load", lambda: Config())
 
-    async def fake_resolve_package(_: str, __: str, ecosystem: str) -> PackageInfo:
+    async def fake_resolve_package(_: str, __: str, ecosystem: str, **kw: object) -> PackageInfo:
         assert ecosystem == "pypi"
         return package
 
-    async def fake_download_source(_: PackageInfo) -> dict[str, str]:
+    async def fake_download_source(_: PackageInfo, **kw: object) -> dict[str, str]:
         return {"setup.py": "exec('boom')"}
 
     def fake_run_prefilter(
@@ -135,11 +137,13 @@ def test_scan_uses_explicit_ecosystem_option(monkeypatch, tmp_path):
 
     monkeypatch.setattr("aigate.cli.Config.load", lambda: Config())
 
-    async def fake_resolve_package(name: str, version: str, ecosystem: str) -> PackageInfo:
+    async def fake_resolve_package(
+        name: str, version: str, ecosystem: str, **kw: object
+    ) -> PackageInfo:
         seen["ecosystem"] = ecosystem
         return _package(name=name, version=version, ecosystem=ecosystem)
 
-    async def fake_download_source(_: PackageInfo) -> dict[str, str]:
+    async def fake_download_source(_: PackageInfo, **kw: object) -> dict[str, str]:
         return {}
 
     def fake_run_prefilter(
@@ -192,10 +196,10 @@ def test_scan_enrichment_failure_does_not_become_error(monkeypatch, tmp_path):
 
     monkeypatch.setattr("aigate.cli.Config.load", lambda: config)
 
-    async def fake_resolve_package(_: str, __: str, ___: str) -> PackageInfo:
+    async def fake_resolve_package(_: str, __: str, ___: str, **kw: object) -> PackageInfo:
         return package
 
-    async def fake_download_source(_: PackageInfo) -> dict[str, str]:
+    async def fake_download_source(_: PackageInfo, **kw: object) -> dict[str, str]:
         return {"setup.py": "print('hi')"}
 
     def fake_run_prefilter(
