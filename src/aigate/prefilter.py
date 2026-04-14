@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from difflib import SequenceMatcher
 
 from .config import Config
-from .models import PackageInfo, PrefilterResult, RiskLevel
+from .models import PackageInfo, PrefilterResult, RiskLevel, RiskSignal
 from .rules.behavior_chains import detect_behavior_chains
 from .rules.compound import check_compound_signals
 from .rules.loader import Rule, load_rules
@@ -605,27 +605,46 @@ def _shannon_entropy(text: str) -> float:
     return -sum((count / length) * math.log2(count / length) for count in freq.values())
 
 
-def _calculate_risk_level(signals: Sequence[str]) -> RiskLevel:
+def _signal_severity(s: str | RiskSignal) -> RiskLevel:
+    """Extract severity from a signal (structured or legacy string)."""
+    if isinstance(s, RiskSignal):
+        return s.severity
+    # Legacy string parsing fallback
+    if "CRITICAL" in s or "blocklist" in s:
+        return RiskLevel.CRITICAL
+    if "HIGH" in s:
+        return RiskLevel.HIGH
+    if "MEDIUM" in s or "typosquat" in s:
+        return RiskLevel.MEDIUM
+    return RiskLevel.LOW
+
+
+def _calculate_risk_level(signals: Sequence[str | RiskSignal]) -> RiskLevel:
     """Calculate overall risk level from signals.
 
+    Accepts both structured ``RiskSignal`` objects and legacy format strings.
     Uses unique pattern counts to avoid inflation from the same pattern
     appearing in multiple files (e.g., requests.get() in source + tests).
     """
     if not signals:
         return RiskLevel.NONE
 
-    high_count = sum(1 for s in signals if "HIGH" in s or "CRITICAL" in s or "blocklist" in s)
+    high_count = sum(
+        1 for s in signals if _signal_severity(s) in (RiskLevel.HIGH, RiskLevel.CRITICAL)
+    )
 
     # Count unique MEDIUM patterns (extract pattern before 'in source:' / 'in install_script:')
     medium_patterns: set[str] = set()
     for s in signals:
-        if "MEDIUM" in s or "typosquat" in s:
+        sev = _signal_severity(s)
+        if sev == RiskLevel.MEDIUM:
+            s_str = str(s)
             # Extract pattern key: "dangerous_pattern(MEDIUM): 'pattern' in source:file"
             # → key is "pattern" (deduplicate across files)
-            if "dangerous_pattern" in s and "'" in s:
-                key = s.split("'")[1] if "'" in s else s
+            if "dangerous_pattern" in s_str and "'" in s_str:
+                key = s_str.split("'")[1] if "'" in s_str else s_str
             else:
-                key = s
+                key = s_str
             medium_patterns.add(key)
     medium_count = len(medium_patterns)
 
@@ -634,14 +653,16 @@ def _calculate_risk_level(signals: Sequence[str]) -> RiskLevel:
     if high_count >= 1:
         return RiskLevel.HIGH
     # Only HIGH and MEDIUM signals escalate risk. LOW signals are informational.
-    # Typosquat is always MEDIUM-equivalent.
-    typosquat_count = sum(1 for s in signals if "typosquat" in s)
+    typosquat_count = sum(
+        1
+        for s in signals
+        if (isinstance(s, RiskSignal) and s.category == "typosquat")
+        or (isinstance(s, str) and "typosquat" in s)
+    )
     escalating = medium_count + typosquat_count
 
     if medium_count >= 3 or escalating >= 4:
         return RiskLevel.HIGH
     if escalating >= 1:
         return RiskLevel.MEDIUM
-    if high_count == 0 and escalating == 0:
-        return RiskLevel.LOW
     return RiskLevel.LOW

@@ -23,6 +23,27 @@ class RiskLevel(StrEnum):
     CRITICAL = "critical"
 
 
+@dataclass
+class RiskSignal:
+    """Structured risk signal with explicit severity.
+
+    Replaces stringly-typed signals like ``"dangerous_pattern(HIGH): ..."``
+    with a proper data structure so severity is never parsed from substrings.
+    """
+
+    severity: RiskLevel
+    category: str
+    description: str
+    filepath: str | None = None
+
+    def __str__(self) -> str:
+        """Produce legacy-compatible string format."""
+        base = f"{self.category}({self.severity.value.upper()}): {self.description}"
+        if self.filepath:
+            base += f" in {self.filepath}"
+        return base
+
+
 class AnalysisLevel(StrEnum):
     L1_QUICK = "l1_quick"
     L2_DEEP = "l2_deep"

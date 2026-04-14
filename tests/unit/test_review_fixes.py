@@ -169,6 +169,81 @@ class TestCriticalCompoundScoring:
 
 
 # ---------------------------------------------------------------------------
+# US-002: Structured RiskSignal dataclass
+# ---------------------------------------------------------------------------
+
+
+class TestRiskSignalDataclass:
+    """RiskSignal uses structured severity, not substring matching."""
+
+    def test_risksignal_exists_in_models(self):
+        from aigate.models import RiskSignal
+
+        sig = RiskSignal(
+            severity=RiskLevel.HIGH, category="dangerous_pattern", description="exec in setup.py"
+        )
+        assert sig.severity == RiskLevel.HIGH
+        assert sig.category == "dangerous_pattern"
+
+    def test_risksignal_str_produces_legacy_format(self):
+        from aigate.models import RiskSignal
+
+        sig = RiskSignal(
+            severity=RiskLevel.HIGH, category="dangerous_pattern", description="'exec' in setup.py"
+        )
+        s = str(sig)
+        assert "HIGH" in s
+        assert "exec" in s
+
+    def test_risksignal_with_filepath(self):
+        from aigate.models import RiskSignal
+
+        sig = RiskSignal(
+            severity=RiskLevel.MEDIUM,
+            category="dangerous_pattern",
+            description="'requests.get' found",
+            filepath="src/main.py",
+        )
+        assert sig.filepath == "src/main.py"
+
+    def test_calculate_risk_level_uses_structured_severity(self):
+        """_calculate_risk_level should work with RiskSignal objects."""
+        from aigate.models import RiskSignal
+
+        signals = [
+            RiskSignal(severity=RiskLevel.HIGH, category="dangerous_pattern", description="exec"),
+            RiskSignal(severity=RiskLevel.HIGH, category="compound", description="full chain"),
+        ]
+        level = _calculate_risk_level(signals)
+        assert level == RiskLevel.CRITICAL
+
+    def test_calculate_risk_level_no_false_positive_from_filename(self):
+        """A signal with 'HIGH' in description but LOW severity must NOT be counted as HIGH."""
+        from aigate.models import RiskSignal
+
+        signals = [
+            RiskSignal(
+                severity=RiskLevel.LOW,
+                category="metadata",
+                description="file critical_HIGH_utils.py exists",
+            ),
+        ]
+        level = _calculate_risk_level(signals)
+        assert level == RiskLevel.LOW
+
+    def test_calculate_risk_level_mixed_string_and_risksignal(self):
+        """Backwards compat: _calculate_risk_level handles both strings and RiskSignal."""
+        from aigate.models import RiskSignal
+
+        signals = [
+            "dangerous_pattern(HIGH): 'exec' in install_script:setup.py",
+            RiskSignal(severity=RiskLevel.HIGH, category="compound", description="chain"),
+        ]
+        level = _calculate_risk_level(signals)
+        assert level == RiskLevel.CRITICAL
+
+
+# ---------------------------------------------------------------------------
 # Issue #3: ecosystem-scoped rules fire in run_prefilter
 # ---------------------------------------------------------------------------
 
