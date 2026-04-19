@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import sys
 import time
 from dataclasses import asdict
@@ -41,7 +42,12 @@ from .prefilter import run_prefilter
 from .reporters.json_reporter import JsonReporter
 from .reporters.sarif_reporter import SarifReporter
 from .reporters.terminal import TerminalReporter
-from .resolver import download_source, read_local_source_files, resolve_package
+from .resolver import (
+    SourceUnavailableError,
+    download_source,
+    read_local_source_files,
+    resolve_package,
+)
 
 console = Console()
 
@@ -80,7 +86,7 @@ def _apply_global_flags(ctx, verbose, quiet):
     "--ecosystem",
     "-e",
     default="pypi",
-    type=click.Choice(["pypi", "npm", "pub", "crates"]),
+    type=click.Choice(["pypi", "npm", "pub", "crates", "cocoapods"]),
     help="Package ecosystem",
 )
 @click.option("--json", "use_json", is_flag=True, help="Output as JSON")
@@ -171,6 +177,7 @@ async def _check(
     provenance = "local" if local_path else "registry"
 
     oversized_msg = None  # Set by crates 200MB cap; force NEEDS_HUMAN_REVIEW below
+    source_unavailable_msg: str | None = None  # Phase 3: bytes-not-inspected gate
 
     if local_path:
         # Offline mode: skip registry, read local source directly
@@ -238,6 +245,7 @@ async def _check(
                 source_files = await download_source(
                     package,
                     max_archive_size_crates=config.resolver.max_archive_size_crates,
+                    github_token=config.github_token,
                 )
             except ValueError as e:
                 # ``archive_oversized`` → record so we force NEEDS_HUMAN_REVIEW
@@ -250,6 +258,13 @@ async def _check(
                 else:
                     console.print(f"[yellow]Warning: Could not download source: {e}[/yellow]")
                     source_files = {}
+            except SourceUnavailableError as e:
+                # Phase 3: bytes-not-inspected MUST NOT become SAFE
+                # (open-questions #10, Architect P1 #3).
+                msg = str(e)
+                console.print(f"[yellow]Warning: {msg} — returning NEEDS_HUMAN_REVIEW[/yellow]")
+                source_unavailable_msg = msg
+                source_files = {}
             except Exception as e:
                 console.print(f"[yellow]Warning: Could not download source: {e}[/yellow]")
                 source_files = {}
@@ -266,6 +281,18 @@ async def _check(
         prefilter_result.needs_ai_review = False
         prefilter_result.passed = False
         prefilter_result.reason = "Archive exceeds size cap; manual review required"
+        # Phase 3 retrofit: oversize = uninspected bytes; block SAFE downstream.
+        prefilter_result.source_unavailable = True
+
+    # 3.2 Source-unavailable override — Phase 3 (opensrc-integration-plan §3.3).
+    # Never SAFE: CocoaPods git source without GITHUB_TOKEN, npm 404, etc.
+    if source_unavailable_msg:
+        prefilter_result.risk_signals.append(f"source_unavailable(HIGH): {source_unavailable_msg}")
+        prefilter_result.risk_level = RiskLevel.MEDIUM
+        prefilter_result.needs_ai_review = False
+        prefilter_result.passed = False
+        prefilter_result.reason = "Source bytes unavailable; manual review required"
+        prefilter_result.source_unavailable = True
 
     # 3.5 Enrichment (optional — adds context to AI prompt)
     enrichment_result = None
@@ -524,7 +551,7 @@ def scan_dir_cmd(ctx, directory: str, staged: bool, use_json: bool, verbose: boo
     "--ecosystem",
     "-e",
     default=None,
-    type=click.Choice(["pypi", "npm", "pub", "crates"]),
+    type=click.Choice(["pypi", "npm", "pub", "crates", "cocoapods"]),
     help="Override package ecosystem",
 )
 @click.option("--json", "use_json", is_flag=True, help="Output as JSON")
@@ -641,7 +668,7 @@ async def _scan(
     "--ecosystem",
     "-e",
     default="pypi",
-    type=click.Choice(["pypi", "npm", "pub", "crates"]),
+    type=click.Choice(["pypi", "npm", "pub", "crates", "cocoapods"]),
     help="Package ecosystem",
 )
 @click.option("--json", "use_json", is_flag=True, help="Output as JSON")
@@ -689,10 +716,14 @@ async def _diff(
             new_pkg = await resolve_package(package_name, new_ver, ecosystem)
             old_files, new_files = await asyncio.gather(
                 download_source(
-                    old_pkg, max_archive_size_crates=config.resolver.max_archive_size_crates
+                    old_pkg,
+                    max_archive_size_crates=config.resolver.max_archive_size_crates,
+                    github_token=config.github_token,
                 ),
                 download_source(
-                    new_pkg, max_archive_size_crates=config.resolver.max_archive_size_crates
+                    new_pkg,
+                    max_archive_size_crates=config.resolver.max_archive_size_crates,
+                    github_token=config.github_token,
                 ),
             )
         except Exception as e:
@@ -1162,6 +1193,8 @@ def _infer_ecosystem(path: str) -> str:
         return "pub"
     if name == "cargo.lock":
         return "crates"
+    if name == "podfile.lock":
+        return "cocoapods"
     return "pypi"
 
 
@@ -1239,8 +1272,47 @@ def _parse_lockfile(path: str) -> list[tuple[str, str]]:
             # source is present and points at the crates.io sparse OR legacy index
             if source.startswith("registry+"):
                 packages.append((name, version))
+    elif p.name.lower() == "podfile.lock":
+        # Podfile.lock is YAML with PODS:, DEPENDENCIES:, EXTERNAL SOURCES:,
+        # SPEC REPOS:, CHECKOUT OPTIONS:, SPEC CHECKSUMS:, PODFILE CHECKSUM:,
+        # COCOAPODS: sections. Phase 3 scope: parse the ``PODS:`` list and
+        # resolve top-level pods. Subspecs (``AFNetworking/Security``) share
+        # the parent version so we dedupe by parent name.
+        data = yaml.safe_load(p.read_text()) or {}
+        pods = data.get("PODS") or []
+        external = set((data.get("EXTERNAL SOURCES") or {}).keys())
+        for entry in pods:
+            # Each entry is either a string like "AFNetworking (4.0.1)" or a
+            # mapping {"AFNetworking (4.0.1)": [dep, dep, ...]}.
+            if isinstance(entry, dict):
+                for key in entry:
+                    name, version = _parse_podfile_entry(str(key))
+                    if name and version and name not in external:
+                        packages.append((name, version))
+            else:
+                name, version = _parse_podfile_entry(str(entry))
+                if name and version and name not in external:
+                    packages.append((name, version))
 
     return _dedupe_packages(packages)
+
+
+def _parse_podfile_entry(raw: str) -> tuple[str, str]:
+    """Parse a single Podfile.lock PODS entry to ``(name, version)``.
+
+    Handles shapes:
+    * ``AFNetworking (4.0.1)`` -> ``("AFNetworking", "4.0.1")``
+    * ``AFNetworking/Security (4.0.1)`` -> ``("AFNetworking", "4.0.1")`` (subspec)
+    * ``AFNetworking (= 4.0.1)`` -> ``("AFNetworking", "4.0.1")``
+    """
+    text = raw.strip()
+    match = re.match(r"^([^\s()]+)\s*\(\s*=?\s*([^\s()]+)\s*\)\s*$", text)
+    if not match:
+        return "", ""
+    raw_name = match.group(1).strip()
+    # Drop any subspec path component — scan at the parent-pod level.
+    parent = raw_name.split("/", 1)[0]
+    return parent, match.group(2).strip()
 
 
 async def _scan_dependency(
@@ -1255,6 +1327,7 @@ async def _scan_dependency(
     package = PackageInfo(name=name, version=version, ecosystem=ecosystem)
 
     oversized_msg: str | None = None
+    source_unavailable_msg: str | None = None
     try:
         package = await resolve_package(name, version, ecosystem, client=client)
         try:
@@ -1262,6 +1335,7 @@ async def _scan_dependency(
                 package,
                 client=client,
                 max_archive_size_crates=config.resolver.max_archive_size_crates,
+                github_token=config.github_token,
             )
         except ValueError as e:
             # See ``_check`` — crates archive_oversized degrades to NEEDS_REVIEW.
@@ -1271,6 +1345,10 @@ async def _scan_dependency(
                 source_files = {}
             else:
                 raise
+        except SourceUnavailableError as e:
+            # Phase 3: bytes-not-inspected gate — never SAFE.
+            source_unavailable_msg = str(e)
+            source_files = {}
     except Exception as e:
         report = AnalysisReport(
             package=package,
@@ -1294,6 +1372,15 @@ async def _scan_dependency(
         prefilter.needs_ai_review = False
         prefilter.passed = False
         prefilter.reason = "Archive exceeds size cap; manual review required"
+        prefilter.source_unavailable = True
+
+    if source_unavailable_msg:
+        prefilter.risk_signals.append(f"source_unavailable(HIGH): {source_unavailable_msg}")
+        prefilter.risk_level = RiskLevel.MEDIUM
+        prefilter.needs_ai_review = False
+        prefilter.passed = False
+        prefilter.reason = "Source bytes unavailable; manual review required"
+        prefilter.source_unavailable = True
     consensus = None
     enrichment_result = None
     error = ""
@@ -1528,6 +1615,7 @@ def _report_from_cached(
         risk_signals=prefilter_data.get("risk_signals", []),
         risk_level=RiskLevel(prefilter_data.get("risk_level", "none")),
         needs_ai_review=prefilter_data.get("needs_ai_review", False),
+        source_unavailable=prefilter_data.get("source_unavailable", False),
     )
 
     consensus = None

@@ -258,10 +258,13 @@ def should_emit(
 def _is_source_unavailable(report: AnalysisReport) -> bool:
     """Detect ``source_unavailable`` flag anywhere in the report.
 
-    Phase 1 compatible — checks structured RiskSignal strings and bare
-    substring matches in risk_signals lists. Consensus-layer flag surfaces
-    here first, prefilter flag second.
+    Phase 3 (v2): ``PrefilterResult.source_unavailable`` is the authoritative
+    structured flag. We *also* scan the legacy risk-signal strings for
+    backward compatibility with pre-Phase-3 fixtures and consensus-level
+    signals propagated from AI models.
     """
+    if getattr(report.prefilter, "source_unavailable", False):
+        return True
     needle = "source_unavailable"
     signals = list(report.prefilter.risk_signals or [])
     if report.consensus:
