@@ -60,6 +60,21 @@ class EmitOpensrcConfig:
 
 
 @dataclass
+class ResolverConfig:
+    """Resolver archive-size caps (opensrc-integration-plan Phase 2).
+
+    Each ecosystem can override the default 50MB ceiling when its real-world
+    package distribution tail exceeds that (e.g. crates.io often ships 100MB+
+    SDKs; capping at 50MB would false-block legitimate packages — Principle
+    2 violation, see PRD §2.5 S3).
+    """
+
+    # 200MB — headroom for aws-sdk-ec2-style large crates; peaks at 5 × 200MB
+    # = 1GB under the existing Semaphore(5) concurrency ceiling.
+    max_archive_size_crates: int = 200 * 1024 * 1024
+
+
+@dataclass
 class Config:
     models: list[ModelConfig] = field(default_factory=list)
     thresholds: ThresholdConfig = field(default_factory=ThresholdConfig)
@@ -69,11 +84,12 @@ class Config:
     cache_ttl_hours: int = 168  # 7 days
     max_analysis_level: str = "l2_deep"  # l1_quick, l2_deep, l3_expert
     output_format: str = "rich"  # rich, json, sarif
-    ecosystems: list[str] = field(default_factory=lambda: ["pypi", "npm", "pub"])
+    ecosystems: list[str] = field(default_factory=lambda: ["pypi", "npm", "pub", "crates"])
     enrichment: EnrichmentConfig = field(default_factory=EnrichmentConfig)
     rules_dir: str = ""  # extra rules directory (e.g. ~/.aigate/rules/)
     disable_rules: list[str] = field(default_factory=list)  # rule IDs to skip
     emit_opensrc: EmitOpensrcConfig = field(default_factory=EmitOpensrcConfig)
+    resolver: ResolverConfig = field(default_factory=ResolverConfig)
 
     @classmethod
     def default(cls) -> Config:
@@ -166,12 +182,31 @@ def _parse_config(path: Path) -> Config:
         cache_ttl_hours=raw.get("cache_ttl_hours", 168),
         max_analysis_level=raw.get("max_analysis_level", "l2_deep"),
         output_format=raw.get("output_format", "rich"),
-        ecosystems=raw.get("ecosystems", ["pypi", "npm", "pub"]),
+        ecosystems=raw.get("ecosystems", ["pypi", "npm", "pub", "crates"]),
         enrichment=_parse_enrichment(raw.get("enrichment", {})),
         rules_dir=rules_dir,
         disable_rules=disable_rules,
         emit_opensrc=_parse_emit_opensrc(raw.get("emit_opensrc", {})),
+        resolver=_parse_resolver(raw.get("resolver", {})),
     )
+
+
+def _parse_resolver(raw: dict | None) -> ResolverConfig:
+    if not raw:
+        return ResolverConfig()
+    cap_raw = raw.get("max_archive_size_crates")
+    cap = ResolverConfig().max_archive_size_crates
+    if cap_raw is not None:
+        try:
+            cap = int(cap_raw)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid resolver.max_archive_size_crates=%r (expected int bytes); "
+                "using default %d",
+                cap_raw,
+                cap,
+            )
+    return ResolverConfig(max_archive_size_crates=cap)
 
 
 def _parse_emit_opensrc(raw: dict | None) -> EmitOpensrcConfig:
