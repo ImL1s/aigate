@@ -36,6 +36,10 @@ PUB_API = "https://pub.dev/api/packages"
 CRATES_API = "https://crates.io/api/v1/crates"
 COCOAPODS_CDN = "https://cdn.cocoapods.org/Specs"
 GITHUB_API = "https://api.github.com"
+# JSR (jsr.io) — Deno/TS registry. We hit the **npm-compat** packument served
+# at ``npm.jsr.io`` (Phase 4, opensrc-integration-plan §3.4). Packument shape is
+# npm-compatible so extraction reuses the existing tarball path.
+JSR_NPM_API = "https://npm.jsr.io"
 
 # Override for E2E sandbox testing with local pypiserver
 _E2E_PYPI_URL = os.environ.get("AIGATE_E2E_PYPI_URL")
@@ -46,6 +50,27 @@ MAX_ARCHIVE_SIZE = 50 * 1024 * 1024  # 50MB — reject larger archives to preven
 # for crates to avoid false-blocking legitimate packages (Principle 2). Archives
 # exceeding this still return NEEDS_HUMAN_REVIEW — never SAFE.
 MAX_CRATES_ARCHIVE_SIZE = 200 * 1024 * 1024  # 200MB
+
+
+def _jsr_to_npm_name(name: str) -> str:
+    """Rewrite a JSR package name (``@scope/pkg``) to its npm-compat form.
+
+    JSR's npm bridge at ``npm.jsr.io`` serves every JSR package under the
+    ``@jsr`` scope, flattening ``@scope/pkg`` to ``@jsr/scope__pkg`` so npm
+    clients can consume it. When the input already starts with ``@jsr/`` we
+    pass it through unchanged (idempotent).
+
+    Non-scoped names are rejected by the JSR registry policy (all JSR
+    packages are scoped) — caller's responsibility to pass a scoped name;
+    here we just return the stripped name unchanged for debuggability.
+    """
+    raw = name.strip()
+    if raw.startswith("@jsr/"):
+        return raw
+    if raw.startswith("@") and "/" in raw:
+        scope, pkg = raw[1:].split("/", 1)
+        return f"@jsr/{scope}__{pkg}"
+    return raw
 
 
 async def resolve_package(
@@ -66,6 +91,8 @@ async def resolve_package(
         return await _resolve_crates(name, version, client=client)
     elif ecosystem == "cocoapods" or ecosystem == "pods":
         return await _resolve_cocoapods(name, version, client=client)
+    elif ecosystem == "jsr":
+        return await _resolve_jsr(name, version, client=client)
     else:
         raise ValueError(f"Unsupported ecosystem: {ecosystem}")
 
@@ -256,6 +283,89 @@ async def _resolve_crates(
     )
 
 
+async def _resolve_jsr(
+    name: str, version: str | None, *, client: httpx.AsyncClient | None = None
+) -> PackageInfo:
+    """Resolve a JSR (jsr.io) package via its npm-compat packument.
+
+    Phase 4 (opensrc-integration-plan §3.4). JSR (Deno's TS-native registry) is
+    a superset of npm — its npm-compat endpoint at ``https://npm.jsr.io`` serves
+    a standard npm packument with ``versions[].dist.tarball`` pointing at a
+    gzipped tar. aigate re-uses the npm extract path; the only JSR-specific bit
+    is the ``@scope/pkg`` -> ``@jsr/scope__pkg`` name rewrite.
+    """
+    npm_name = _jsr_to_npm_name(name)
+    url = f"{JSR_NPM_API}/{npm_name}"
+    if client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        data = resp.json()
+    else:
+        async with httpx.AsyncClient(timeout=30) as c:
+            resp = await c.get(url)
+            resp.raise_for_status()
+            data = resp.json()
+
+    latest_version = version or data.get("dist-tags", {}).get("latest", "")
+    version_data = data.get("versions", {}).get(latest_version, {}) or {}
+
+    # JSR packuments generally do not include npm-style install scripts, but
+    # honor them if present for forward compatibility.
+    scripts = version_data.get("scripts", {}) or {}
+    has_scripts = bool(
+        scripts.get("preinstall") or scripts.get("postinstall") or scripts.get("install")
+    )
+
+    return PackageInfo(
+        name=name,  # Preserve original JSR ``@scope/pkg`` for UX / cache keys
+        version=latest_version,
+        ecosystem="jsr",
+        author=_extract_npm_author(version_data),
+        description=version_data.get("description", ""),
+        homepage=version_data.get("homepage", "") or "",
+        repository=_extract_npm_repo(version_data),
+        has_install_scripts=has_scripts,
+        dependencies=list((version_data.get("dependencies") or {}).keys()),
+        metadata={"version_data": version_data, "npm_name": npm_name},
+    )
+
+
+async def _download_jsr_source(
+    package: PackageInfo, *, client: httpx.AsyncClient | None = None
+) -> dict[str, str]:
+    """Download a JSR package tarball via the npm.jsr.io packument.
+
+    Mirrors ``_download_npm_source`` exactly, only the base URL differs.
+    Factored separately (not a call-through) so a future JSR divergence
+    (e.g. per-file ``jsr.io`` API) can land without touching npm.
+    """
+    npm_name = _jsr_to_npm_name(package.name)
+    url = f"{JSR_NPM_API}/{npm_name}/{package.version}"
+    if client:
+        resp = await client.get(url)
+    else:
+        async with httpx.AsyncClient(timeout=30) as c:
+            resp = await c.get(url)
+    resp.raise_for_status()
+    data = resp.json()
+
+    tarball_url = data.get("dist", {}).get("tarball")
+    if not tarball_url:
+        return {}
+
+    if client:
+        resp = await client.get(tarball_url)
+    else:
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
+            resp = await c.get(tarball_url)
+    resp.raise_for_status()
+    content = resp.content
+    if len(content) > MAX_ARCHIVE_SIZE:
+        raise ValueError(f"Archive too large: {len(content)} bytes (max {MAX_ARCHIVE_SIZE})")
+
+    return _extract_archive(content, tarball_url)
+
+
 async def download_source(
     package: PackageInfo,
     dest: Path | None = None,
@@ -291,6 +401,8 @@ async def download_source(
         )
     elif package.ecosystem in ("cocoapods", "pods"):
         return await _download_cocoapods_source(package, client=client, github_token=github_token)
+    elif package.ecosystem == "jsr":
+        return await _download_jsr_source(package, client=client)
     else:
         raise ValueError(f"Unsupported ecosystem: {package.ecosystem}")
 

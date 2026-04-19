@@ -49,6 +49,18 @@ from .resolver import (
     resolve_package,
 )
 
+# Supported ecosystems shared by check/scan/diff. Phase 4 adds ``jsr``.
+# Kept as a tuple so click.Choice accepts it directly and tests can import
+# the canonical list rather than grepping for duplicated literals.
+SUPPORTED_ECOSYSTEMS: tuple[str, ...] = (
+    "pypi",
+    "npm",
+    "pub",
+    "crates",
+    "cocoapods",
+    "jsr",
+)
+
 console = Console()
 
 
@@ -86,7 +98,7 @@ def _apply_global_flags(ctx, verbose, quiet):
     "--ecosystem",
     "-e",
     default="pypi",
-    type=click.Choice(["pypi", "npm", "pub", "crates", "cocoapods"]),
+    type=click.Choice(SUPPORTED_ECOSYSTEMS),
     help="Package ecosystem",
 )
 @click.option("--json", "use_json", is_flag=True, help="Output as JSON")
@@ -551,7 +563,7 @@ def scan_dir_cmd(ctx, directory: str, staged: bool, use_json: bool, verbose: boo
     "--ecosystem",
     "-e",
     default=None,
-    type=click.Choice(["pypi", "npm", "pub", "crates", "cocoapods"]),
+    type=click.Choice(SUPPORTED_ECOSYSTEMS),
     help="Override package ecosystem",
 )
 @click.option("--json", "use_json", is_flag=True, help="Output as JSON")
@@ -668,7 +680,7 @@ async def _scan(
     "--ecosystem",
     "-e",
     default="pypi",
-    type=click.Choice(["pypi", "npm", "pub", "crates", "cocoapods"]),
+    type=click.Choice(SUPPORTED_ECOSYSTEMS),
     help="Package ecosystem",
 )
 @click.option("--json", "use_json", is_flag=True, help="Output as JSON")
