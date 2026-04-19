@@ -26,7 +26,7 @@ def _stub_check(monkeypatch, *, risk_level: RiskLevel = RiskLevel.LOW):
     async def fake_resolve(name, version, ecosystem):
         return package
 
-    async def fake_download(_):
+    async def fake_download(_, **kw):
         return {"setup.py": "print('hi')"}
 
     def fake_prefilter(_, __, ___=None):

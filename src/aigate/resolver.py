@@ -24,10 +24,17 @@ class ExtractionError(Exception):
 PYPI_API = "https://pypi.org/pypi"
 NPM_API = "https://registry.npmjs.org"
 PUB_API = "https://pub.dev/api/packages"
+CRATES_API = "https://crates.io/api/v1/crates"
 
 # Override for E2E sandbox testing with local pypiserver
 _E2E_PYPI_URL = os.environ.get("AIGATE_E2E_PYPI_URL")
 MAX_ARCHIVE_SIZE = 50 * 1024 * 1024  # 50MB — reject larger archives to prevent OOM
+
+# Crates.io archives are larger than npm/pypi norms (large SDKs, ML crates w/ bundled
+# assets routinely exceed 50MB). Per opensrc-integration-plan §2.5 S3: raise to 200MB
+# for crates to avoid false-blocking legitimate packages (Principle 2). Archives
+# exceeding this still return NEEDS_HUMAN_REVIEW — never SAFE.
+MAX_CRATES_ARCHIVE_SIZE = 200 * 1024 * 1024  # 200MB
 
 
 async def resolve_package(
@@ -44,6 +51,8 @@ async def resolve_package(
         return await _resolve_npm(name, version, client=client)
     elif ecosystem == "pub":
         return await _resolve_pub(name, version, client=client)
+    elif ecosystem == "crates":
+        return await _resolve_crates(name, version, client=client)
     else:
         raise ValueError(f"Unsupported ecosystem: {ecosystem}")
 
@@ -150,12 +159,106 @@ async def _resolve_pub(
     )
 
 
+async def _resolve_crates(
+    name: str, version: str | None, *, client: httpx.AsyncClient | None = None
+) -> PackageInfo:
+    """Resolve from crates.io registry API.
+
+    Uses ``GET /api/v1/crates/{name}`` (or ``{name}/{version}``). For the
+    version-less form the response includes a ``crate`` section for package
+    metadata and a ``versions`` array; we select the latest non-yanked version.
+
+    Crates don't have an install-script step aigate executes, but ``build.rs``
+    + proc-macros still run at ``cargo build`` time — the prefilter flags
+    those via crates-specific rules (see ``rules/builtin/crates_rules.yml``).
+    """
+    # Version-specific endpoint returns ``{ "version": {...} }``. Without a
+    # version we hit the crate-wide endpoint which carries the full payload.
+    url = f"{CRATES_API}/{name}" if not version else f"{CRATES_API}/{name}/{version}"
+    if client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        data = resp.json()
+    else:
+        async with httpx.AsyncClient(timeout=30) as c:
+            resp = await c.get(url)
+            resp.raise_for_status()
+            data = resp.json()
+
+    crate_data = data.get("crate") or {}
+    versions = data.get("versions") or []
+
+    version_entry: dict = {}
+    if version:
+        # crates.io returns a single ``version`` object at the top level for
+        # version-specific queries.
+        version_entry = data.get("version") or {}
+        latest_version = version_entry.get("num", version)
+    else:
+        # Prefer ``max_stable_version`` / ``max_version`` from crate_data,
+        # fall back to the first non-yanked entry in versions.
+        latest_version = crate_data.get("max_stable_version") or crate_data.get("max_version") or ""
+        for entry in versions:
+            if entry.get("num") == latest_version:
+                version_entry = entry
+                break
+        if not version_entry and versions:
+            for entry in versions:
+                if not entry.get("yanked"):
+                    version_entry = entry
+                    latest_version = entry.get("num", latest_version)
+                    break
+
+    # Yanked-version warning: log but still return metadata — the caller
+    # decides whether to proceed (scan will flag it via risk signal).
+    if version_entry.get("yanked"):
+        logger.warning("crates.io: %s==%s is yanked (unsafe to install)", name, latest_version)
+
+    repository = version_entry.get("repository") or crate_data.get("repository") or ""
+    homepage = crate_data.get("homepage", "") or ""
+    description = crate_data.get("description", "") or version_entry.get("description", "")
+
+    # ``authors`` not available on the ``crate`` summary endpoint — it's on
+    # the individual version object (sometimes). Fall back to empty string.
+    author = ""
+    if isinstance(version_entry.get("authors"), list):
+        author = ", ".join(a for a in version_entry["authors"] if isinstance(a, str))
+    elif isinstance(version_entry.get("published_by"), dict):
+        pb = version_entry["published_by"]
+        author = pb.get("name") or pb.get("login") or ""
+
+    return PackageInfo(
+        name=name,
+        version=latest_version,
+        ecosystem="crates",
+        author=author,
+        description=description,
+        homepage=homepage,
+        repository=repository,
+        # aigate never runs cargo build. We still flag build.rs / proc-macro via
+        # prefilter risk signals — those run at compile time, not install time.
+        has_install_scripts=False,
+        dependencies=[],
+        metadata={"crate": crate_data, "version_entry": version_entry},
+    )
+
+
 async def download_source(
     package: PackageInfo,
     dest: Path | None = None,
     client: httpx.AsyncClient | None = None,
+    *,
+    max_archive_size_crates: int | None = None,
 ) -> dict[str, str]:
-    """Download and extract package source, return {filepath: content} dict."""
+    """Download and extract package source, return {filepath: content} dict.
+
+    Args:
+        package: PackageInfo with ecosystem + name + version.
+        dest: reserved — written to disk only on demand, unused today.
+        client: optional shared httpx client (connection pooling).
+        max_archive_size_crates: override for the crates 200MB archive cap,
+            plumbed through from ``Config.resolver.max_archive_size_crates``.
+    """
     logger.debug(
         "Downloading source: %s==%s (%s)", package.name, package.version, package.ecosystem
     )
@@ -165,6 +268,10 @@ async def download_source(
         return await _download_npm_source(package, client=client)
     elif package.ecosystem == "pub":
         return await _download_pub_source(package, client=client)
+    elif package.ecosystem == "crates":
+        return await _download_crates_source(
+            package, client=client, max_archive_size=max_archive_size_crates
+        )
     else:
         raise ValueError(f"Unsupported ecosystem: {package.ecosystem}")
 
@@ -268,6 +375,53 @@ async def _download_pub_source(
     return _extract_archive(content, tarball_url)
 
 
+async def _download_crates_source(
+    package: PackageInfo,
+    *,
+    client: httpx.AsyncClient | None = None,
+    max_archive_size: int | None = None,
+) -> dict[str, str]:
+    """Download a ``.crate`` tarball from crates.io and extract text files.
+
+    The download endpoint redirects to a signed static.crates.io URL; we
+    follow redirects. ``.crate`` files are gzipped tarballs (same format as
+    ``.tar.gz``), so we reuse ``_extract_archive`` with a ``.tar.gz``
+    filename hint.
+
+    Args:
+        package: PackageInfo for the crate (name + version required).
+        client: Optional shared httpx client.
+        max_archive_size: Optional override for the 200MB cap (see
+            ``MAX_CRATES_ARCHIVE_SIZE``). The caller is responsible for
+            threading this through from ``Config.max_archive_size_crates``.
+
+    Raises:
+        ValueError: When the archive exceeds the size cap. Upstream converts
+            this to ``archive_oversized`` + NEEDS_HUMAN_REVIEW per plan §2.5.
+    """
+    size_cap = max_archive_size if max_archive_size is not None else MAX_CRATES_ARCHIVE_SIZE
+
+    # Direct download URL — crates.io responds with a 302 to static.crates.io.
+    download_url = f"{CRATES_API}/{package.name}/{package.version}/download"
+
+    if client:
+        resp = await client.get(download_url)
+    else:
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
+            resp = await c.get(download_url)
+    resp.raise_for_status()
+    content = resp.content
+
+    if len(content) > size_cap:
+        # Per PRD §2.5 S3: oversize must never produce SAFE. Raise
+        # ``archive_oversized`` so the caller surfaces NEEDS_HUMAN_REVIEW.
+        raise ValueError(f"archive_oversized: {len(content)} bytes exceeds crates cap {size_cap}")
+
+    # ``.crate`` files are gzipped tar archives — pass a .tar.gz filename hint.
+    archive_name = f"{package.name}-{package.version}.tar.gz"
+    return _extract_archive(content, archive_name)
+
+
 def _is_path_safe(name: str) -> bool:
     """Reject path traversal and absolute paths."""
     if not name or name.startswith("/") or ".." in name.split("/"):
@@ -303,6 +457,9 @@ def _extract_archive(content: bytes, filename: str) -> dict[str, str]:
         ".sh",
         ".bat",
         ".pth",
+        # crates: Rust sources (Phase 2, opensrc-integration-plan).
+        # Needed so build.rs / src/*.rs land in the extract for AI prompts.
+        ".rs",
     }
     max_file_size = 512 * 1024  # 512KB per file
 

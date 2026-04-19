@@ -80,7 +80,7 @@ def _apply_global_flags(ctx, verbose, quiet):
     "--ecosystem",
     "-e",
     default="pypi",
-    type=click.Choice(["pypi", "npm", "pub"]),
+    type=click.Choice(["pypi", "npm", "pub", "crates"]),
     help="Package ecosystem",
 )
 @click.option("--json", "use_json", is_flag=True, help="Output as JSON")
@@ -170,6 +170,8 @@ async def _check(
     start = time.monotonic()
     provenance = "local" if local_path else "registry"
 
+    oversized_msg = None  # Set by crates 200MB cap; force NEEDS_HUMAN_REVIEW below
+
     if local_path:
         # Offline mode: skip registry, read local source directly
         from pathlib import Path as FilePath
@@ -233,13 +235,37 @@ async def _check(
         # 2. Download source
         with console.status(f"Downloading {package.name}=={package.version}..."):
             try:
-                source_files = await download_source(package)
+                source_files = await download_source(
+                    package,
+                    max_archive_size_crates=config.resolver.max_archive_size_crates,
+                )
+            except ValueError as e:
+                # ``archive_oversized`` → record so we force NEEDS_HUMAN_REVIEW
+                # (PRD §2.5 S3: oversize must never produce SAFE).
+                msg = str(e)
+                if "archive_oversized" in msg:
+                    console.print(f"[yellow]Warning: {msg} — returning NEEDS_HUMAN_REVIEW[/yellow]")
+                    oversized_msg = msg
+                    source_files = {}
+                else:
+                    console.print(f"[yellow]Warning: Could not download source: {e}[/yellow]")
+                    source_files = {}
             except Exception as e:
                 console.print(f"[yellow]Warning: Could not download source: {e}[/yellow]")
                 source_files = {}
 
     # 3. Static pre-filter
     prefilter_result = run_prefilter(package, config, source_files)
+
+    # 3.1 Oversized-archive override — NEEDS_HUMAN_REVIEW (exit 1), PRD §2.5 S3.
+    # Never SAFE. Using MEDIUM risk keeps the policy mapping at NEEDS_REVIEW
+    # (exit 1); also skip AI so we don't pass empty-source prompts downstream.
+    if oversized_msg:
+        prefilter_result.risk_signals.append(f"archive_oversized(HIGH): {oversized_msg}")
+        prefilter_result.risk_level = RiskLevel.MEDIUM
+        prefilter_result.needs_ai_review = False
+        prefilter_result.passed = False
+        prefilter_result.reason = "Archive exceeds size cap; manual review required"
 
     # 3.5 Enrichment (optional — adds context to AI prompt)
     enrichment_result = None
@@ -498,7 +524,7 @@ def scan_dir_cmd(ctx, directory: str, staged: bool, use_json: bool, verbose: boo
     "--ecosystem",
     "-e",
     default=None,
-    type=click.Choice(["pypi", "npm", "pub"]),
+    type=click.Choice(["pypi", "npm", "pub", "crates"]),
     help="Override package ecosystem",
 )
 @click.option("--json", "use_json", is_flag=True, help="Output as JSON")
@@ -615,7 +641,7 @@ async def _scan(
     "--ecosystem",
     "-e",
     default="pypi",
-    type=click.Choice(["pypi", "npm", "pub"]),
+    type=click.Choice(["pypi", "npm", "pub", "crates"]),
     help="Package ecosystem",
 )
 @click.option("--json", "use_json", is_flag=True, help="Output as JSON")
@@ -662,8 +688,12 @@ async def _diff(
             old_pkg = await resolve_package(package_name, old_ver, ecosystem)
             new_pkg = await resolve_package(package_name, new_ver, ecosystem)
             old_files, new_files = await asyncio.gather(
-                download_source(old_pkg),
-                download_source(new_pkg),
+                download_source(
+                    old_pkg, max_archive_size_crates=config.resolver.max_archive_size_crates
+                ),
+                download_source(
+                    new_pkg, max_archive_size_crates=config.resolver.max_archive_size_crates
+                ),
             )
         except Exception as e:
             _emit_error(
@@ -1130,6 +1160,8 @@ def _infer_ecosystem(path: str) -> str:
         return "npm"
     if name == "pubspec.lock":
         return "pub"
+    if name == "cargo.lock":
+        return "crates"
     return "pypi"
 
 
@@ -1193,6 +1225,20 @@ def _parse_lockfile(path: str) -> list[tuple[str, str]]:
                 ver = stripped.split("version:")[1].strip().strip('"')
                 packages.append((current_name, ver))
                 current_name = None
+    elif p.name == "Cargo.lock":
+        # Cargo.lock is TOML, one [[package]] table per dependency.
+        # We only scan crates.io-registry entries; git deps, path deps, and
+        # workspace members are skipped (different trust / resolution).
+        data = tomllib.loads(p.read_text())
+        for package in data.get("package", []):
+            name = str(package.get("name", "")).strip()
+            version = str(package.get("version", "")).strip()
+            source = str(package.get("source", "")).strip()
+            if not name or not version:
+                continue
+            # source is present and points at the crates.io sparse OR legacy index
+            if source.startswith("registry+"):
+                packages.append((name, version))
 
     return _dedupe_packages(packages)
 
@@ -1208,9 +1254,23 @@ async def _scan_dependency(
     start = time.monotonic()
     package = PackageInfo(name=name, version=version, ecosystem=ecosystem)
 
+    oversized_msg: str | None = None
     try:
         package = await resolve_package(name, version, ecosystem, client=client)
-        source_files = await download_source(package, client=client)
+        try:
+            source_files = await download_source(
+                package,
+                client=client,
+                max_archive_size_crates=config.resolver.max_archive_size_crates,
+            )
+        except ValueError as e:
+            # See ``_check`` — crates archive_oversized degrades to NEEDS_REVIEW.
+            msg = str(e)
+            if "archive_oversized" in msg:
+                oversized_msg = msg
+                source_files = {}
+            else:
+                raise
     except Exception as e:
         report = AnalysisReport(
             package=package,
@@ -1227,6 +1287,13 @@ async def _scan_dependency(
         }
 
     prefilter = run_prefilter(package, config, source_files)
+
+    if oversized_msg:
+        prefilter.risk_signals.append(f"archive_oversized(HIGH): {oversized_msg}")
+        prefilter.risk_level = RiskLevel.MEDIUM
+        prefilter.needs_ai_review = False
+        prefilter.passed = False
+        prefilter.reason = "Archive exceeds size cap; manual review required"
     consensus = None
     enrichment_result = None
     error = ""

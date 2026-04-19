@@ -9,7 +9,18 @@ from .config import Config
 logger = logging.getLogger(__name__)
 
 VALID_BACKENDS = {"claude", "codex", "gemini", "ollama", "openai_compat"}
-VALID_ECOSYSTEMS = {"pypi", "npm", "pub", "cargo", "gem", "composer", "go", "nuget", "maven"}
+VALID_ECOSYSTEMS = {
+    "pypi",
+    "npm",
+    "pub",
+    "crates",  # Rust — Phase 2, opensrc-integration-plan
+    "cargo",  # legacy alias for crates
+    "gem",
+    "composer",
+    "go",
+    "nuget",
+    "maven",
+}
 
 
 class ConfigValidationError(ValueError):
