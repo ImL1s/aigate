@@ -15,6 +15,8 @@ VALID_ECOSYSTEMS = {
     "pub",
     "crates",  # Rust — Phase 2, opensrc-integration-plan
     "cargo",  # legacy alias for crates
+    "cocoapods",  # Phase 3, opensrc-integration-plan
+    "pods",  # legacy alias for cocoapods
     "gem",
     "composer",
     "go",

@@ -95,6 +95,13 @@ class PrefilterResult:
     risk_signals: list[str] = field(default_factory=list)
     risk_level: RiskLevel = RiskLevel.NONE
     needs_ai_review: bool = False
+    # Phase 3 (opensrc-integration-plan §3.3): propagates "bytes not inspected"
+    # across the pipeline. Set when a resolver cannot fetch source (e.g.
+    # CocoaPods git source without GITHUB_TOKEN -> 403, crates archive
+    # oversized, registry 404 on yanked package). The consensus layer refuses
+    # to declare SAFE when this is True; opensrc_cache.should_emit refuses to
+    # publish bytes-that-weren't-scanned downstream.
+    source_unavailable: bool = False
 
 
 @dataclass

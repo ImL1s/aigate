@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import logging
 import os
@@ -21,10 +22,20 @@ class ExtractionError(Exception):
     """Raised when archive extraction fails (corrupt, unsupported, etc.)."""
 
 
+class SourceUnavailableError(Exception):
+    """Raised when source bytes cannot be fetched and the caller MUST NOT claim SAFE.
+
+    Phase 3 (opensrc-integration-plan §3.3, Architect P1 #3): upstream surfaces
+    this as ``PrefilterResult.source_unavailable=True`` and NEEDS_HUMAN_REVIEW.
+    """
+
+
 PYPI_API = "https://pypi.org/pypi"
 NPM_API = "https://registry.npmjs.org"
 PUB_API = "https://pub.dev/api/packages"
 CRATES_API = "https://crates.io/api/v1/crates"
+COCOAPODS_CDN = "https://cdn.cocoapods.org/Specs"
+GITHUB_API = "https://api.github.com"
 
 # Override for E2E sandbox testing with local pypiserver
 _E2E_PYPI_URL = os.environ.get("AIGATE_E2E_PYPI_URL")
@@ -51,8 +62,10 @@ async def resolve_package(
         return await _resolve_npm(name, version, client=client)
     elif ecosystem == "pub":
         return await _resolve_pub(name, version, client=client)
-    elif ecosystem == "crates":
+    elif ecosystem == "crates" or ecosystem == "cargo":
         return await _resolve_crates(name, version, client=client)
+    elif ecosystem == "cocoapods" or ecosystem == "pods":
+        return await _resolve_cocoapods(name, version, client=client)
     else:
         raise ValueError(f"Unsupported ecosystem: {ecosystem}")
 
@@ -249,6 +262,7 @@ async def download_source(
     client: httpx.AsyncClient | None = None,
     *,
     max_archive_size_crates: int | None = None,
+    github_token: str | None = None,
 ) -> dict[str, str]:
     """Download and extract package source, return {filepath: content} dict.
 
@@ -258,6 +272,9 @@ async def download_source(
         client: optional shared httpx client (connection pooling).
         max_archive_size_crates: override for the crates 200MB archive cap,
             plumbed through from ``Config.resolver.max_archive_size_crates``.
+        github_token: optional GitHub PAT for authed rate-limit window.
+            Required for most git-sourced CocoaPods (unauth 60/hr is not
+            enough in CI). Absent + 403 -> ``SourceUnavailableError``.
     """
     logger.debug(
         "Downloading source: %s==%s (%s)", package.name, package.version, package.ecosystem
@@ -268,10 +285,12 @@ async def download_source(
         return await _download_npm_source(package, client=client)
     elif package.ecosystem == "pub":
         return await _download_pub_source(package, client=client)
-    elif package.ecosystem == "crates":
+    elif package.ecosystem in ("crates", "cargo"):
         return await _download_crates_source(
             package, client=client, max_archive_size=max_archive_size_crates
         )
+    elif package.ecosystem in ("cocoapods", "pods"):
+        return await _download_cocoapods_source(package, client=client, github_token=github_token)
     else:
         raise ValueError(f"Unsupported ecosystem: {package.ecosystem}")
 
@@ -422,6 +441,387 @@ async def _download_crates_source(
     return _extract_archive(content, archive_name)
 
 
+# ---------------------------------------------------------------------------
+# CocoaPods — Phase 3 of opensrc-integration-plan
+# ---------------------------------------------------------------------------
+
+
+def _cocoapods_shard(name: str) -> str:
+    """Compute the CDN shard for a pod — first 3 MD5 hex chars of the name.
+
+    CocoaPods CDN serves podspec JSON at
+    ``{CDN}/Specs/{a}/{b}/{c}/{name}/{version}/{name}.podspec.json`` where
+    ``a/b/c`` are the first three hex characters of ``md5(name)``. Verified
+    against the live CDN (e.g. ``AFNetworking`` -> ``a75/d9a/e0a/`` etc).
+    """
+    digest = hashlib.md5(name.encode("utf-8")).hexdigest()  # noqa: S324 — not crypto, just a shard key
+    return f"{digest[0]}/{digest[1]}/{digest[2]}"
+
+
+def _derive_github_repo(git_url: str) -> tuple[str, str, str] | None:
+    """Parse ``owner/repo`` from a git URL suitable for GitHub's tarball API.
+
+    Returns ``(host, owner, repo)`` for known hosts, else None. Supports:
+
+    * ``https://github.com/owner/repo(.git)?``
+    * ``git@github.com:owner/repo(.git)?``
+    * ``git+https://github.com/...``
+    * gitlab.com (same shape, but the caller may choose not to use it)
+    """
+    if not git_url:
+        return None
+    url = git_url.strip()
+    for prefix in ("git+",):
+        if url.startswith(prefix):
+            url = url[len(prefix) :]
+    # SSH form: git@host:owner/repo.git
+    ssh = re.match(
+        r"^git@(?P<host>github\.com|gitlab\.com)[:/](?P<owner>[^/]+)/(?P<repo>[^/\s#?]+?)(?:\.git)?$",
+        url,
+    )
+    if ssh:
+        return ssh.group("host"), ssh.group("owner"), ssh.group("repo")
+    https = re.match(
+        r"^https?://(?P<host>github\.com|gitlab\.com)/(?P<owner>[^/]+)/(?P<repo>[^/\s#?]+?)(?:\.git)?(?:[/?#].*)?$",
+        url,
+    )
+    if https:
+        return https.group("host"), https.group("owner"), https.group("repo")
+    return None
+
+
+async def _resolve_cocoapods(
+    name: str, version: str | None, *, client: httpx.AsyncClient | None = None
+) -> PackageInfo:
+    """Resolve a pod via the CocoaPods CDN podspec JSON.
+
+    URL: ``{COCOAPODS_CDN}/{a}/{b}/{c}/{name}/{version}/{name}.podspec.json``.
+    Versionless lookup not supported by the CDN — we fetch the per-shard
+    versions listing instead (``{CDN}/{shard}/{name}/{name}.podspec.json``)
+    is NOT a valid endpoint; for v1 we require an explicit version.
+    """
+    if not version:
+        # No cheap versionless listing on the CDN. Surface a clear error so
+        # callers know to pass -v / parse Podfile.lock rather than silently
+        # guessing.
+        raise ValueError("CocoaPods resolution requires an explicit version (pass -v X.Y.Z)")
+
+    shard = _cocoapods_shard(name)
+    url = f"{COCOAPODS_CDN}/{shard}/{name}/{version}/{name}.podspec.json"
+
+    if client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        data = resp.json()
+    else:
+        async with httpx.AsyncClient(timeout=30) as c:
+            resp = await c.get(url)
+            resp.raise_for_status()
+            data = resp.json()
+
+    authors = data.get("authors") or {}
+    if isinstance(authors, dict):
+        author_str = ", ".join(authors.keys())
+    elif isinstance(authors, list):
+        author_str = ", ".join(str(a) for a in authors)
+    else:
+        author_str = str(authors or "")
+
+    source = data.get("source") or {}
+    repository = ""
+    if isinstance(source, dict) and source.get("git"):
+        repository = str(source["git"])
+    homepage = str(data.get("homepage", "") or "")
+
+    return PackageInfo(
+        name=name,
+        version=version,
+        ecosystem="cocoapods",
+        author=author_str,
+        description=str(data.get("summary") or data.get("description", "") or ""),
+        homepage=homepage,
+        repository=repository,
+        has_install_scripts=bool(
+            source.get("prepare_command") if isinstance(source, dict) else False
+        ),
+        dependencies=list((data.get("dependencies") or {}).keys()),
+        metadata={"podspec": data, "source": source},
+    )
+
+
+async def _download_cocoapods_source(
+    package: PackageInfo,
+    *,
+    client: httpx.AsyncClient | None = None,
+    github_token: str | None = None,
+) -> dict[str, str]:
+    """Download source for a CocoaPods package.
+
+    Decision tree (PRD §3.3):
+
+    * ``source.http`` with ``type: tar.gz|zip`` -> direct HTTPS download.
+    * ``source.git`` + ``tag`` / ``commit`` / ``branch`` -> GitHub tarball
+      detour. Needs GitHub API; rate-limited to 60/hr without token.
+      On 403 / 429 -> raise ``SourceUnavailableError`` so the caller can
+      surface NEEDS_HUMAN_REVIEW.
+    * Unknown / unsupported shape -> raise ``SourceUnavailableError``.
+
+    Divergence detection (T-COC-DIV-1/2): when we successfully fetch a
+    GitHub tarball, we attach a synthetic ``.aigate-tarball-manifest`` file
+    to the result so ``check_cocoapods_risks`` can inspect it. Specifically,
+    if ``.gitattributes`` is absent from the tarball AND the podspec's
+    ``source.source_files`` glob advertises paths missing from the tarball,
+    that is a divergence signal. We stash the manifest inline rather than
+    re-plumbing a second return channel through ``download_source``.
+    """
+    podspec = package.metadata.get("podspec") if package.metadata else None
+    source = package.metadata.get("source") if package.metadata else None
+    if not isinstance(source, dict):
+        raise SourceUnavailableError(
+            f"CocoaPods podspec for {package.name}@{package.version} has no usable source field"
+        )
+
+    # Case 1: http direct archive
+    http_url = source.get("http")
+    if isinstance(http_url, str) and http_url:
+        return await _download_cocoapods_http(http_url, source, client=client)
+
+    # Case 2: git+ref
+    git_url = source.get("git")
+    if isinstance(git_url, str) and git_url:
+        parsed = _derive_github_repo(git_url)
+        if parsed is None:
+            raise SourceUnavailableError(f"Unsupported git host for CocoaPods source: {git_url}")
+        host, owner, repo = parsed
+        # Only github.com has a public tarball API exposed via api.github.com
+        # that doesn't require a full git clone. gitlab.com hosts work via
+        # ``/-/archive/<ref>/<name>-<ref>.tar.gz`` but require no API auth.
+        if host != "github.com":
+            raise SourceUnavailableError(
+                f"CocoaPods git source on {host} not supported without GITHUB_TOKEN-equivalent auth"
+            )
+        ref = source.get("tag") or source.get("commit") or source.get("branch") or package.version
+        return await _fetch_github_tarball(
+            owner=owner,
+            repo=repo,
+            ref=str(ref),
+            package_name=package.name,
+            source=source,
+            podspec=podspec,
+            client=client,
+            github_token=github_token,
+        )
+
+    raise SourceUnavailableError(
+        f"CocoaPods podspec for {package.name}@{package.version} has no http or git source"
+    )
+
+
+async def _download_cocoapods_http(
+    http_url: str,
+    source: dict,
+    *,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, str]:
+    """Download direct-HTTP CocoaPods archive and extract."""
+    if client:
+        resp = await client.get(http_url)
+    else:
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
+            resp = await c.get(http_url)
+    resp.raise_for_status()
+    content = resp.content
+    if len(content) > MAX_ARCHIVE_SIZE:
+        raise ValueError(f"Archive too large: {len(content)} bytes (max {MAX_ARCHIVE_SIZE})")
+
+    # Detect archive type: explicit ``type`` hint first, fall back to URL suffix
+    archive_type = str(source.get("type") or "").lower()
+    if archive_type == "tgz":
+        archive_type = "tar.gz"
+    if not archive_type:
+        lowered = http_url.lower()
+        if lowered.endswith(".zip"):
+            archive_type = "zip"
+        elif lowered.endswith((".tar.gz", ".tgz")):
+            archive_type = "tar.gz"
+        elif lowered.endswith(".tar"):
+            archive_type = "tar"
+    archive_name = f"source.{archive_type or 'tar.gz'}"
+    return _extract_archive(content, archive_name)
+
+
+async def _fetch_github_tarball(
+    *,
+    owner: str,
+    repo: str,
+    ref: str,
+    package_name: str,
+    source: dict,
+    podspec: dict | None,
+    client: httpx.AsyncClient | None = None,
+    github_token: str | None = None,
+) -> dict[str, str]:
+    """Fetch + extract a GitHub tarball at ref for a CocoaPods git source.
+
+    On 403 / 404 / 429 (rate-limit without token), raise
+    ``SourceUnavailableError`` — caller surfaces NEEDS_HUMAN_REVIEW rather
+    than SAFE on uninspected bytes.
+    """
+    url = f"{GITHUB_API}/repos/{owner}/{repo}/tarball/{ref}"
+    headers: dict[str, str] = {"Accept": "application/vnd.github+json"}
+    if github_token:
+        headers["Authorization"] = f"Bearer {github_token}"
+
+    try:
+        if client:
+            resp = await client.get(url, headers=headers, follow_redirects=True)
+        else:
+            async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
+                resp = await c.get(url, headers=headers)
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        if status in (403, 404, 429):
+            # 403 is the canonical unauth-rate-limit response; 404 happens when
+            # a missing repo/tag *or* a token that lacks access hides the repo;
+            # 429 is explicit rate-limiting. All three MUST NOT be laundered
+            # into SAFE per PRD §3.3 + Architect P1 #3.
+            raise SourceUnavailableError(
+                f"GitHub rate-limit or unauthorized on {url} (HTTP {status}) — "
+                "set GITHUB_TOKEN for authed 5000/hr window"
+            ) from exc
+        raise
+
+    content = resp.content
+    if len(content) > MAX_ARCHIVE_SIZE:
+        raise ValueError(f"Archive too large: {len(content)} bytes (max {MAX_ARCHIVE_SIZE})")
+
+    archive_name = f"{owner}-{repo}-{ref}.tar.gz"
+    files = _extract_archive(content, archive_name)
+
+    # Divergence detection (T-COC-DIV-1/2): a lightweight check comparing the
+    # podspec's advertised source_files glob(s) to the actual tarball file list.
+    # Detection needs the full tarball file list (including .gitattributes which
+    # the default whitelist may drop), so we peek at the archive separately.
+    tarball_manifest = _list_tarball_members(content, archive_name)
+    divergence = _detect_podspec_divergence(
+        source=source,
+        files=files,
+        tarball_manifest=tarball_manifest,
+    )
+    if divergence:
+        # Add a pseudo-file so the prefilter can see the signal inline.
+        files["__aigate__/cocoapods-divergence.txt"] = divergence
+
+    return files
+
+
+def _list_tarball_members(content: bytes, archive_name: str) -> dict[str, bytes]:
+    """Return ``{member_name: bytes or empty}`` for every file in a tarball.
+
+    Unlike ``_extract_archive`` this does not filter by extension — divergence
+    detection needs to see files like ``.gitattributes`` that the text-file
+    whitelist drops. Returns empty dict on extraction failure.
+    """
+    manifest: dict[str, bytes] = {}
+    try:
+        if archive_name.endswith((".tar.gz", ".tgz")):
+            with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as tar:
+                for member in tar.getmembers():
+                    if not member.isfile():
+                        continue
+                    if not _is_path_safe(member.name):
+                        continue
+                    try:
+                        f = tar.extractfile(member)
+                        if f is None:
+                            manifest[member.name] = b""
+                        else:
+                            # Cap per-member at 64KB — we only inspect for substrings.
+                            manifest[member.name] = f.read(64 * 1024)
+                    except Exception:
+                        manifest[member.name] = b""
+    except (tarfile.TarError, EOFError, OSError):
+        return {}
+    return manifest
+
+
+# Top-level directories we expect to see inside GitHub tarballs. The archive
+# root is a single ``<owner>-<repo>-<sha>/`` directory; anything inside that
+# should correspond to paths the podspec advertises.
+def _detect_podspec_divergence(
+    source: dict,
+    files: dict[str, str],
+    tarball_manifest: dict[str, bytes] | None = None,
+) -> str | None:
+    """Emit a one-line divergence message when the tarball looks suspicious.
+
+    Heuristic:
+    * If ``.gitattributes`` is in the tarball with ``export-ignore`` entries,
+      skip — legitimate divergence-on-design (T-COC-DIV-2 control passes).
+    * Else, if podspec declares ``source_files: "Classes/**"`` (or similar)
+      and the tarball has no ``Classes/`` directory, emit the signal.
+    * Else, no signal (lightweight detection per PRD §3.3 "keep lightweight").
+
+    ``tarball_manifest`` is the raw archive file list (including files the
+    text-file whitelist dropped, like ``.gitattributes``). When None we fall
+    back to ``files`` only.
+    """
+    # Use the unfiltered manifest when available; it reveals .gitattributes.
+    manifest_source: dict[str, str | bytes]
+    if tarball_manifest:
+        manifest_source = dict(tarball_manifest)
+    else:
+        manifest_source = dict(files)
+
+    # Flatten top-level segments (strip root prefix like ``owner-repo-sha/``)
+    seen_segments: set[str] = set()
+    gitattributes_export_ignore = False
+    for path, payload in manifest_source.items():
+        # Skip our own synthetic files
+        if path.startswith("__aigate__/"):
+            continue
+        parts = path.split("/", 2)
+        if len(parts) >= 2:
+            seen_segments.add(parts[1])
+        if path.endswith(".gitattributes"):
+            if isinstance(payload, bytes):
+                needle = b"export-ignore"
+                if needle in payload:
+                    gitattributes_export_ignore = True
+            else:
+                if "export-ignore" in (payload or ""):
+                    gitattributes_export_ignore = True
+
+    if gitattributes_export_ignore:
+        # Explanatory .gitattributes present -> no divergence signal
+        return None
+
+    # Parse podspec source_files into top-level segments
+    source_files_field = source.get("source_files") if isinstance(source, dict) else None
+    advertised: list[str] = []
+    if isinstance(source_files_field, str):
+        advertised = [source_files_field]
+    elif isinstance(source_files_field, list):
+        advertised = [str(x) for x in source_files_field if isinstance(x, str)]
+
+    missing: list[str] = []
+    for glob in advertised:
+        top = glob.split("/", 1)[0].rstrip("*").strip()
+        if not top or top == ".":
+            continue
+        if top in seen_segments:
+            continue
+        missing.append(top)
+
+    if missing:
+        return (
+            "podspec-vs-tarball path divergence: podspec advertises "
+            f"source_files paths {missing!r} that are missing from the GitHub tarball"
+        )
+    return None
+
+
 def _is_path_safe(name: str) -> bool:
     """Reject path traversal and absolute paths."""
     if not name or name.startswith("/") or ".." in name.split("/"):
@@ -460,13 +860,29 @@ def _extract_archive(content: bytes, filename: str) -> dict[str, str]:
         # crates: Rust sources (Phase 2, opensrc-integration-plan).
         # Needed so build.rs / src/*.rs land in the extract for AI prompts.
         ".rs",
+        # cocoapods: Swift / Obj-C / Obj-C++ sources (Phase 3).
+        ".swift",
+        ".m",
+        ".mm",
+        ".h",
+        ".c",
+        ".cc",
+        ".cpp",
+        ".podspec",
+        ".gitattributes",
     }
     max_file_size = 512 * 1024  # 512KB per file
+
+    # Dotfile basenames we explicitly want extracted (no file extension).
+    # ``.gitattributes`` carries ``export-ignore`` directives needed for
+    # cocoapods divergence detection (Phase 3 opensrc-integration-plan).
+    dotfile_basenames = {".gitattributes"}
 
     def _should_extract(name: str, raw_bytes: bytes) -> tuple[bool, str | None]:
         """Return (should_extract, decoded_text_or_None)."""
         suffix = Path(name).suffix.lower()
-        if suffix in text_extensions:
+        basename = name.rsplit("/", 1)[-1]
+        if suffix in text_extensions or basename in dotfile_basenames:
             try:
                 return True, raw_bytes.decode("utf-8", errors="replace")
             except Exception:

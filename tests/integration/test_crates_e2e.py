@@ -118,6 +118,57 @@ def test_e2e_clean_crate_is_safe(monkeypatch):
     assert payload["package"]["name"] == "clean"
 
 
+def test_e2e_crates_oversize_archive_sets_source_unavailable(monkeypatch):
+    """Phase 3 retrofit: crates archive > 200MB -> NEEDS_HUMAN_REVIEW (exit 1) AND
+    ``PrefilterResult.source_unavailable=True``.
+
+    This is the PRD §2.5 S3 "never SAFE on uninspected bytes" gate expressed as
+    a structured field rather than a bare signal string (open-questions #10 v2).
+    """
+    cfg = Config.default()
+    # Shrink the cap to 1 byte so the tiny archive blows past it without
+    # actually allocating 200MB.
+    cfg.resolver.max_archive_size_crates = 1
+    monkeypatch.setattr("aigate.cli.Config.load", lambda: cfg)
+
+    archive = _make_crate({"big-1.0.0/Cargo.toml": '[package]\nname = "big"\n'})
+    responses = {
+        f"{CRATES_API}/big": _FakeResponse(
+            json_data={
+                "crate": {
+                    "name": "big",
+                    "max_stable_version": "1.0.0",
+                    "description": "",
+                },
+                "versions": [{"num": "1.0.0", "yanked": False}],
+            }
+        ),
+        f"{CRATES_API}/big/1.0.0/download": _FakeResponse(content=archive),
+    }
+    _install_fake_client(monkeypatch, responses)
+
+    result = CliRunner().invoke(main, ["check", "big", "-e", "crates", "--skip-ai", "--json"])
+    # NEEDS_HUMAN_REVIEW maps to exit 1 via the MEDIUM risk level branch.
+    assert result.exit_code == 1, result.output
+    payload = _parse_json_from_mixed_output(result.output)
+    # Never SAFE on uninspected bytes.
+    assert payload["decision"] != "safe"
+    prefilter_payload = payload["prefilter"]
+    assert prefilter_payload["source_unavailable"] is True
+    assert any("archive_oversized" in s for s in prefilter_payload["risk_signals"])
+
+
+def _parse_json_from_mixed_output(output: str) -> dict:
+    """Pull the JSON payload out of CLI output that may have ``console.print``
+    warnings prefixed (e.g. "Warning: archive_oversized..."). Finds the first
+    ``{`` and parses from there.
+    """
+    start = output.find("{")
+    if start == -1:
+        raise AssertionError(f"No JSON payload in output: {output!r}")
+    return json.loads(output[start:])
+
+
 def test_e2e_build_rs_crate_flags_suspicious(monkeypatch):
     """Crate with build.rs + subprocess → prefilter HIGH → exit code 2."""
     monkeypatch.setattr("aigate.cli.Config.load", lambda: Config.default())

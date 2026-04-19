@@ -251,8 +251,12 @@ def run_prefilter(
         signals.extend(code_signals)
 
     # 5.1 Ecosystem-specific compile-time-attack signals (Rust / crates)
-    if source_files and package.ecosystem == "crates":
+    if source_files and package.ecosystem in ("crates", "cargo"):
         signals.extend(check_crates_risks(source_files))
+
+    # 5.2 Ecosystem-specific signals for CocoaPods (Phase 3 opensrc-integration-plan)
+    if source_files and package.ecosystem in ("cocoapods", "pods"):
+        signals.extend(check_cocoapods_risks(source_files))
 
     # 5.5 Extension mismatch detection — catch disguised code files
     if source_files:
@@ -551,6 +555,39 @@ def check_crates_risks(source_files: dict[str, str]) -> list[str]:
                     f"'proc-macro=true' in install_script:{filepath} "
                     "(proc-macro crate — executes arbitrary code at compile time)"
                 )
+
+    return signals
+
+
+def check_cocoapods_risks(source_files: dict[str, str]) -> list[str]:
+    """CocoaPods-specific risk signals (Phase 3 opensrc-integration-plan §3.3).
+
+    Emits:
+
+    * HIGH when ``__aigate__/cocoapods-divergence.txt`` is present (synthetic
+      signal file injected by ``_download_cocoapods_source`` when the
+      GitHub-tarball file list diverges from the podspec's advertised
+      ``source_files`` — aigate-unique defense against the git-archive-vs-
+      checkout / export-ignore attack class). See T-COC-DIV-1 / T-COC-DIV-2.
+    * HIGH when a ``.gitattributes`` file contains ``export-ignore`` directives
+      that could hide malicious files from ``git archive`` while still landing
+      them in a ``git checkout`` (same attack class; the resolver already
+      suppresses the divergence signal when ``.gitattributes`` exists, so
+      users still get a HIGH signal here to surface the condition).
+    """
+    signals: list[str] = []
+
+    for filepath, content in source_files.items():
+        if filepath == "__aigate__/cocoapods-divergence.txt":
+            signals.append(
+                f"suspicious_pattern(HIGH): podspec-vs-tarball path divergence ({content.strip()})"
+            )
+        if filepath.endswith(".gitattributes") and "export-ignore" in (content or ""):
+            signals.append(
+                "suspicious_pattern(HIGH): "
+                f"'.gitattributes export-ignore' in install_script:{filepath} "
+                "(can hide files from git archive, may differ from git checkout)"
+            )
 
     return signals
 
