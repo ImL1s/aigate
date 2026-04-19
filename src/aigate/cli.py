@@ -100,6 +100,19 @@ def _apply_global_flags(ctx, verbose, quiet):
     default=None,
     help="Analyze local source path instead of downloading from registry.",
 )
+@click.option(
+    "--emit-opensrc/--no-emit-opensrc",
+    "emit_opensrc",
+    default=None,
+    help="After a SAFE scan, write extracted bytes into ~/.opensrc/ (opensrc-compatible cache).",
+)
+@click.option(
+    "--opensrc-overwrite",
+    type=click.Choice(["never", "always", "when-aigate-wins"]),
+    default="never",
+    show_default=True,
+    help="Collision policy when --emit-opensrc hits an existing directory.",
+)
 @click.option("--verbose", "-V", is_flag=True, help="Enable debug logging.", hidden=True)
 @click.option("--quiet", "-q", is_flag=True, help="Suppress non-error output.", hidden=True)
 @click.pass_context
@@ -113,6 +126,8 @@ def check(
     level: str,
     skip_ai: bool,
     local_path: str | None,
+    emit_opensrc: bool | None,
+    opensrc_overwrite: str,
     verbose: bool,
     quiet: bool,
 ):
@@ -122,7 +137,18 @@ def check(
     """
     _apply_global_flags(ctx, verbose, quiet)
     asyncio.run(
-        _check(package, pkg_version, ecosystem, use_json, use_sarif, level, skip_ai, local_path)
+        _check(
+            package,
+            pkg_version,
+            ecosystem,
+            use_json,
+            use_sarif,
+            level,
+            skip_ai,
+            local_path,
+            emit_opensrc=emit_opensrc,
+            opensrc_overwrite=opensrc_overwrite,
+        )
     )
 
 
@@ -135,6 +161,9 @@ async def _check(
     level_str: str,
     skip_ai: bool,
     local_path: str | None = None,
+    *,
+    emit_opensrc: bool | None = None,
+    opensrc_overwrite: str = "never",
 ):
     config = Config.load()
     level = AnalysisLevel(level_str)
@@ -265,7 +294,66 @@ async def _check(
         package.name, package.version, ecosystem, report, config.cache_dir, provenance=provenance
     )
 
+    # 6. Optional opensrc-compatible emit (Phase 1, opensrc-integration-plan)
+    await _maybe_emit_opensrc(
+        package=package,
+        source_files=source_files,
+        report=report,
+        config=config,
+        flag_override=emit_opensrc,
+        overwrite_policy=opensrc_overwrite,
+    )
+
     _print_report_and_exit(report, use_json, use_sarif)
+
+
+async def _maybe_emit_opensrc(
+    *,
+    package: PackageInfo,
+    source_files: dict[str, str],
+    report: AnalysisReport,
+    config: Config,
+    flag_override: bool | None,
+    overwrite_policy: str,
+    tarball_bytes: bytes | None = None,
+    tarball_url: str | None = None,
+) -> None:
+    """Guarded call to opensrc_cache.emit_to_opensrc_cache.
+
+    Gated by ``should_emit()``. Runs the synchronous emit in a worker thread so
+    we don't block the asyncio loop under ``Semaphore(5)``. Never raises — logs
+    and attaches the result to ``report.opensrc_emit``.
+    """
+    from .opensrc_cache import emit_to_opensrc_cache, should_emit
+
+    emit, reason = should_emit(report, config, flag_override=flag_override)
+    if not emit:
+        report.opensrc_emit = None if reason == "flag_off" else _emit_skipped(reason)
+        return
+
+    try:
+        result = await asyncio.to_thread(
+            emit_to_opensrc_cache,
+            package,
+            source_files,
+            report,
+            config,
+            overwrite_policy,
+            tarball_bytes,
+            tarball_url,
+        )
+    except Exception as exc:  # noqa: BLE001 — emit failure must never crash scan
+        import logging as _logging
+
+        _logging.getLogger(__name__).warning("opensrc-emit failed: %s", exc)
+        result = _emit_skipped(f"write_error: {exc}")
+    report.opensrc_emit = result
+
+
+def _emit_skipped(reason: str):
+    from .models import OpensrcEmitResult
+
+    return OpensrcEmitResult(emitted=False, reason=reason)
 
 
 def _scan_single_file(
@@ -864,7 +952,36 @@ def doctor(ctx):
     else:
         console.print("  [dim]No AI tools detected for hook installation[/dim]")
 
-    # 5. Warm popular-packages cache (best-effort)
+    # 5. Filesystem outputs (opensrc-integration-plan §2.6 observability)
+    console.print("\n[bold]Filesystem outputs:[/bold]")
+    try:
+        from .opensrc_cache import list_filesystem_outputs
+
+        summary = list_filesystem_outputs(config.emit_opensrc)
+        console.print(f"  opensrc cache: {summary['cache_dir']}")
+        if summary["exists"]:
+            console.print(
+                f"  [green]\u2713[/green] sources.json: "
+                f"{'valid' if summary['sources_json_valid'] else 'missing or corrupt'}"
+            )
+            console.print(
+                f"    packages tracked: {summary['total_packages']} "
+                f"(aigate-origin: {summary['aigate_origin']}, "
+                f"opensrc-origin: {summary['opensrc_origin']})"
+            )
+            if summary.get("last_write"):
+                console.print(f"    last write: {summary['last_write']}")
+        else:
+            console.print("  [dim]cache does not exist yet (never emitted)[/dim]")
+        console.print(
+            f"  emit_opensrc.enabled: "
+            f"{'yes' if config.emit_opensrc.enabled else 'no'} "
+            f"(on_collision={config.emit_opensrc.on_collision})"
+        )
+    except (OSError, ValueError) as exc:
+        console.print(f"  [yellow]doctor: filesystem-outputs inspection failed: {exc}[/yellow]")
+
+    # 6. Warm popular-packages cache (best-effort)
     import asyncio as _asyncio_doc
 
     from .rules.popular_packages import get_popular_packages as _get_pop_doc
