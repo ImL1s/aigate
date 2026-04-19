@@ -17,6 +17,7 @@ VALID_ECOSYSTEMS = {
     "cargo",  # legacy alias for crates
     "cocoapods",  # Phase 3, opensrc-integration-plan
     "pods",  # legacy alias for cocoapods
+    "jsr",  # JSR (jsr.io) — Phase 4, opensrc-integration-plan §3.4
     "gem",
     "composer",
     "go",

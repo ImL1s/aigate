@@ -10,15 +10,21 @@ from .skill_template import AIGATE_CHECK_SKILL, AIGATE_SCAN_SKILL
 AIGATE_INSTRUCTION = """\
 ## Package Security (aigate)
 
-Before installing ANY package via pip, npm, yarn, or pnpm, ALWAYS run:
+Before installing ANY package via pip, npm, yarn, pnpm, cargo, pod (CocoaPods),
+deno/jsr, or flutter pub, ALWAYS run:
 
 ```
 aigate check <package_name>
 ```
 
-For npm packages:
+Supported ecosystems (pass via `-e <ecosystem>`): `pypi`, `npm`, `pub`,
+`crates`, `cocoapods`, `jsr`. Examples:
+
 ```
 aigate check <package_name> -e npm
+aigate check <package_name> -e crates          # Rust / cargo
+aigate check <package_name> -e cocoapods       # iOS / CocoaPods
+aigate check <package_name> -e jsr             # JSR (Deno / TS native)
 ```
 
 **Interpret exit codes:**
@@ -30,7 +36,31 @@ aigate check <package_name> -e npm
 ```
 aigate scan requirements.txt
 aigate scan package-lock.json
+aigate scan Cargo.lock
+aigate scan Podfile.lock
 ```
+
+## opensrc Integration
+
+aigate can emit its scan results as an opensrc-compatible cache so AI coding
+agents can read bytes aigate has vetted. Enable in `.aigate.yml`:
+
+```yaml
+emit_opensrc:
+  enabled: true
+  on_collision: refuse  # or: overwrite, prefer-aigate
+```
+
+Or via CLI flag:
+
+```
+aigate check zod --emit-opensrc
+```
+
+aigate writes to `~/.opensrc/repos/<host>/<owner>/<repo>/<version>/` with
+an `aigate-provenance.json` sentinel preserving tarball SHA256 and scan
+verdict. Downstream agents reading that cache can trust the bytes were
+scanned through multi-model AI consensus before being made available.
 
 This is a supply chain security measure. Never skip this step.
 """

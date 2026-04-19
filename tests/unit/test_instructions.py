@@ -87,3 +87,54 @@ def test_all_targets_have_consistent_marker(tmp_path: Path):
         content = file_path.read_text()
         assert MARKER in content, f"{file_path} missing MARKER"
         assert "aigate check" in content, f"{file_path} missing usage instructions"
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 opensrc-integration-plan §3.5 — AIGATE_INSTRUCTION ecosystem list +
+# opensrc stanza. Executor task spec: "verify AIGATE_INSTRUCTION contains
+# 'crates', 'cocoapods', 'jsr', and 'opensrc' substrings; verify idempotent
+# re-run via `aigate instructions` doesn't duplicate stanzas."
+# ---------------------------------------------------------------------------
+
+
+def test_aigate_instruction_mentions_all_six_ecosystems():
+    """AIGATE_INSTRUCTION advertises pypi/npm/pub + crates/cocoapods/jsr."""
+    for eco in ("pypi", "npm", "pub", "crates", "cocoapods", "jsr"):
+        assert eco in AIGATE_INSTRUCTION, f"AIGATE_INSTRUCTION missing ecosystem mention: {eco}"
+
+
+def test_aigate_instruction_includes_opensrc_stanza():
+    """opensrc integration stanza is part of the shared instruction block."""
+    assert "opensrc Integration" in AIGATE_INSTRUCTION
+    assert "emit_opensrc" in AIGATE_INSTRUCTION
+    assert "--emit-opensrc" in AIGATE_INSTRUCTION
+    assert "aigate-provenance.json" in AIGATE_INSTRUCTION
+
+
+def test_agents_md_includes_opensrc_and_new_ecosystems(tmp_path: Path):
+    """AGENTS.md (codex target) inherits the enriched AIGATE_INSTRUCTION."""
+    generate_instruction_files(tmp_path, tools=["codex"])
+    agents_md = tmp_path / "AGENTS.md"
+    assert agents_md.exists()
+    content = agents_md.read_text()
+    for needle in ("crates", "cocoapods", "jsr", "opensrc Integration"):
+        assert needle in content, f"AGENTS.md missing {needle!r}"
+
+
+def test_instructions_idempotent_rerun_no_duplicate_stanzas(tmp_path: Path):
+    """Running `aigate instructions` twice must not duplicate the opensrc stanza."""
+    # First pass: create the file
+    generate_instruction_files(tmp_path, tools=["codex"])
+    agents_md = tmp_path / "AGENTS.md"
+    first = agents_md.read_text()
+    assert first.count("## opensrc Integration") == 1
+    assert first.count(MARKER) == 1
+
+    # Second pass: should skip via the MARKER check, file unchanged
+    messages = generate_instruction_files(tmp_path, tools=["codex"])
+    assert len(messages) == 1
+    assert messages[0].startswith("(skip)")
+    second = agents_md.read_text()
+    assert second == first
+    assert second.count("## opensrc Integration") == 1
+    assert second.count(MARKER) == 1
