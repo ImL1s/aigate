@@ -43,6 +43,23 @@ class ThresholdConfig:
 
 
 @dataclass
+class EmitOpensrcConfig:
+    """Opt-in ``~/.opensrc`` cache emission — aigate writes scanned tarball bytes.
+
+    Per opensrc-integration-plan §3.1, aigate is a *producer* of opensrc-compatible
+    output. Emission is off by default; users enable via CLI ``--emit-opensrc`` or
+    ``.aigate.yml``.
+    """
+
+    enabled: bool = False
+    cache_dir: str | None = None  # Defaults to ~/.opensrc when None
+    # never: refuse on any collision with unknown-origin directory (safe default)
+    # overwrite: always overwrite, regardless of origin (power users)
+    # prefer-aigate: overwrite when aigate-scanned (same-SHA no-op, different-SHA wins)
+    on_collision: str = "refuse"  # {refuse, overwrite, prefer-aigate}
+
+
+@dataclass
 class Config:
     models: list[ModelConfig] = field(default_factory=list)
     thresholds: ThresholdConfig = field(default_factory=ThresholdConfig)
@@ -56,6 +73,7 @@ class Config:
     enrichment: EnrichmentConfig = field(default_factory=EnrichmentConfig)
     rules_dir: str = ""  # extra rules directory (e.g. ~/.aigate/rules/)
     disable_rules: list[str] = field(default_factory=list)  # rule IDs to skip
+    emit_opensrc: EmitOpensrcConfig = field(default_factory=EmitOpensrcConfig)
 
     @classmethod
     def default(cls) -> Config:
@@ -152,6 +170,25 @@ def _parse_config(path: Path) -> Config:
         enrichment=_parse_enrichment(raw.get("enrichment", {})),
         rules_dir=rules_dir,
         disable_rules=disable_rules,
+        emit_opensrc=_parse_emit_opensrc(raw.get("emit_opensrc", {})),
+    )
+
+
+def _parse_emit_opensrc(raw: dict | None) -> EmitOpensrcConfig:
+    if not raw:
+        return EmitOpensrcConfig()
+    on_collision = str(raw.get("on_collision", "refuse")).lower()
+    if on_collision not in {"refuse", "overwrite", "prefer-aigate"}:
+        logger.warning(
+            "Invalid emit_opensrc.on_collision=%r (expected refuse|overwrite|prefer-aigate); "
+            "defaulting to refuse",
+            on_collision,
+        )
+        on_collision = "refuse"
+    return EmitOpensrcConfig(
+        enabled=bool(raw.get("enabled", False)),
+        cache_dir=raw.get("cache_dir"),
+        on_collision=on_collision,
     )
 
 

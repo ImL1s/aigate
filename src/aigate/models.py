@@ -287,6 +287,21 @@ class EnrichmentResult:
 
 
 @dataclass
+class OpensrcEmitResult:
+    """Result of an opensrc-cache emit attempt.
+
+    Captures whether the emit happened, where bytes landed, and why emit was
+    skipped if ``emitted`` is False. Surfaced in ``AnalysisReport`` so JSON /
+    SARIF reporters can include provenance.
+    """
+
+    emitted: bool = False
+    path: str | None = None  # Relative to ~/.opensrc/ (e.g. "repos/github.com/.../1.0.0")
+    reason: str | None = None  # Why we skipped, or a short status for observability
+    sha256: str | None = None  # Tarball sha256 when emitted
+
+
+@dataclass
 class AnalysisReport:
     package: PackageInfo
     prefilter: PrefilterResult
@@ -295,3 +310,4 @@ class AnalysisReport:
     version_diff: VersionDiff | None = None
     cached: bool = False
     total_latency_ms: int = 0
+    opensrc_emit: OpensrcEmitResult | None = None
