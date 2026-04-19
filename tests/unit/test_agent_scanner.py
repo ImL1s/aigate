@@ -372,4 +372,3 @@ class TestScanDirectoryForDisguisedFiles:
         assert len(findings) == 1
         assert "helper.md" in findings[0]
         assert "shell" in findings[0].lower()
-

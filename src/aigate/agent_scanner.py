@@ -144,6 +144,7 @@ def scan_directory_for_disguised_files(directory: str) -> list[str]:
         return findings
 
     from .resolver import SKIP_DIRS
+
     for dir_path, dirs, files in os.walk(root):
         dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
         for fname in files:
