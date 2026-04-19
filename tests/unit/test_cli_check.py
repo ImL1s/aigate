@@ -31,7 +31,7 @@ def test_check_skip_ai_medium_exits_needs_review(monkeypatch):
         assert (name, version, ecosystem) == ("demo", None, "pypi")
         return package
 
-    async def fake_download_source(_: PackageInfo) -> dict[str, str]:
+    async def fake_download_source(_: PackageInfo, **kw: object) -> dict[str, str]:
         return {"setup.py": "print('hi')"}
 
     def fake_run_prefilter(
@@ -143,7 +143,7 @@ def test_check_accepts_pub_ecosystem(monkeypatch):
         assert (name, version) == ("http", None)
         return package
 
-    async def fake_download_source(_: PackageInfo) -> dict[str, str]:
+    async def fake_download_source(_: PackageInfo, **kw: object) -> dict[str, str]:
         return {"lib/http.dart": "void main() {}"}
 
     def fake_run_prefilter(

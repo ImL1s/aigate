@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Sequence
 from difflib import SequenceMatcher
 
@@ -249,6 +250,14 @@ def run_prefilter(
         )
         signals.extend(code_signals)
 
+    # 5.1 Ecosystem-specific compile-time-attack signals (Rust / crates)
+    if source_files and package.ecosystem in ("crates", "cargo"):
+        signals.extend(check_crates_risks(source_files))
+
+    # 5.2 Ecosystem-specific signals for CocoaPods (Phase 3 opensrc-integration-plan)
+    if source_files and package.ecosystem in ("cocoapods", "pods"):
+        signals.extend(check_cocoapods_risks(source_files))
+
     # 5.5 Extension mismatch detection — catch disguised code files
     if source_files:
         mismatch_signals = check_extension_mismatch(source_files)
@@ -370,6 +379,8 @@ def check_dangerous_patterns(
         "preinstall.js",
         "install.js",
         "prepare.js",
+        # crates: build.rs runs at ``cargo build`` time, same trust profile.
+        "build.rs",
     }
     # Files that are HIGH only at package root (not in subdirs like tests/)
     root_only_install_files = {
@@ -475,6 +486,112 @@ def check_extension_mismatch(source_files: dict[str, str]) -> list[str]:
     return signals
 
 
+# Regex: ``proc-macro = true`` inside a ``[lib]`` table.
+# Permissive whitespace, accepts single/double-quoted bool too.
+_PROC_MACRO_RE = re.compile(
+    r"^\s*proc[-_]macro\s*=\s*(?:true|\"true\"|'true')\s*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+# Regex: ``lib.proc-macro = true`` style (inline, single-line) — rarer.
+_PROC_MACRO_INLINE_RE = re.compile(
+    r"proc[-_]macro\s*=\s*(?:true|\"true\"|'true')",
+    re.IGNORECASE,
+)
+
+# Network-at-build-time detectors for build.rs content. Each presence is HIGH.
+_BUILD_RS_NETWORK_PATTERNS = [
+    (re.compile(r"\breqwest\b"), "reqwest"),
+    (re.compile(r"\bureq\b"), "ureq"),
+    (re.compile(r"\bhyper\b"), "hyper"),
+    (re.compile(r"\bstd::net::"), "std::net"),
+    (re.compile(r"\bTcpStream\b"), "TcpStream"),
+    (re.compile(r"\bCommand::new\s*\(\s*\"(?:curl|wget|nc|bash|sh)\""), "Command(curl/wget/sh)"),
+]
+
+
+def check_crates_risks(source_files: dict[str, str]) -> list[str]:
+    """Rust-specific risk signals for crates.io packages.
+
+    Emits HIGH-severity signals per PRD §3.2 and Architect P2 #6:
+
+    * ``build.rs`` presence → arbitrary code at ``cargo build`` time.
+    * ``proc-macro = true`` in a ``Cargo.toml`` → arbitrary code at compile time.
+    * Network calls or shell-outs inside ``build.rs`` → HIGH.
+
+    All three are severity-HIGH to match aigate's existing npm ``postinstall``
+    handling (Architect P2 #6). These are detected additively — presence alone
+    is enough; further pattern matches inside ``build.rs`` (e.g. subprocess,
+    env-var exfil) already fire via ``check_dangerous_patterns``.
+    """
+    signals: list[str] = []
+
+    for filepath, content in source_files.items():
+        filename = filepath.rsplit("/", 1)[-1] if "/" in filepath else filepath
+
+        # build.rs presence — HIGH (matches npm postinstall severity).
+        if filename == "build.rs":
+            signals.append(
+                "dangerous_pattern(HIGH): "
+                f"'build.rs' in install_script:{filepath} "
+                "(executes arbitrary code at cargo build time)"
+            )
+            # Network-at-build-time — bump when additional network deps are
+            # used during the build (far more suspicious than a build.rs that
+            # just links a .a file).
+            for pattern, label in _BUILD_RS_NETWORK_PATTERNS:
+                if pattern.search(content):
+                    signals.append(
+                        "dangerous_pattern(HIGH): "
+                        f"'build.rs:{label}' in install_script:{filepath} "
+                        "(network or subprocess from build script)"
+                    )
+
+        # proc-macro = true in any Cargo.toml — HIGH.
+        if filename == "Cargo.toml":
+            if _PROC_MACRO_RE.search(content) or _PROC_MACRO_INLINE_RE.search(content):
+                signals.append(
+                    "dangerous_pattern(HIGH): "
+                    f"'proc-macro=true' in install_script:{filepath} "
+                    "(proc-macro crate — executes arbitrary code at compile time)"
+                )
+
+    return signals
+
+
+def check_cocoapods_risks(source_files: dict[str, str]) -> list[str]:
+    """CocoaPods-specific risk signals (Phase 3 opensrc-integration-plan §3.3).
+
+    Emits:
+
+    * HIGH when ``__aigate__/cocoapods-divergence.txt`` is present (synthetic
+      signal file injected by ``_download_cocoapods_source`` when the
+      GitHub-tarball file list diverges from the podspec's advertised
+      ``source_files`` — aigate-unique defense against the git-archive-vs-
+      checkout / export-ignore attack class). See T-COC-DIV-1 / T-COC-DIV-2.
+    * HIGH when a ``.gitattributes`` file contains ``export-ignore`` directives
+      that could hide malicious files from ``git archive`` while still landing
+      them in a ``git checkout`` (same attack class; the resolver already
+      suppresses the divergence signal when ``.gitattributes`` exists, so
+      users still get a HIGH signal here to surface the condition).
+    """
+    signals: list[str] = []
+
+    for filepath, content in source_files.items():
+        if filepath == "__aigate__/cocoapods-divergence.txt":
+            signals.append(
+                f"suspicious_pattern(HIGH): podspec-vs-tarball path divergence ({content.strip()})"
+            )
+        if filepath.endswith(".gitattributes") and "export-ignore" in (content or ""):
+            signals.append(
+                "suspicious_pattern(HIGH): "
+                f"'.gitattributes export-ignore' in install_script:{filepath} "
+                "(can hide files from git archive, may differ from git checkout)"
+            )
+
+    return signals
+
+
 def _filter_install_files(source_files: dict[str, str]) -> dict[str, str]:
     """Return only install-time files from source_files.
 
@@ -490,6 +607,9 @@ def _filter_install_files(source_files: dict[str, str]) -> dict[str, str]:
         "preinstall.js",
         "install.js",
         "prepare.js",
+        # crates: build.rs runs at ``cargo build`` time — same trust profile
+        # as npm postinstall / python setup.py.
+        "build.rs",
     }
     result = {}
     for filepath, content in source_files.items():

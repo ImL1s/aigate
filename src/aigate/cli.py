@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import sys
 import time
 from dataclasses import asdict
@@ -41,7 +42,24 @@ from .prefilter import run_prefilter
 from .reporters.json_reporter import JsonReporter
 from .reporters.sarif_reporter import SarifReporter
 from .reporters.terminal import TerminalReporter
-from .resolver import download_source, read_local_source_files, resolve_package
+from .resolver import (
+    SourceUnavailableError,
+    download_source,
+    read_local_source_files,
+    resolve_package,
+)
+
+# Supported ecosystems shared by check/scan/diff. Phase 4 adds ``jsr``.
+# Kept as a tuple so click.Choice accepts it directly and tests can import
+# the canonical list rather than grepping for duplicated literals.
+SUPPORTED_ECOSYSTEMS: tuple[str, ...] = (
+    "pypi",
+    "npm",
+    "pub",
+    "crates",
+    "cocoapods",
+    "jsr",
+)
 
 console = Console()
 
@@ -80,7 +98,7 @@ def _apply_global_flags(ctx, verbose, quiet):
     "--ecosystem",
     "-e",
     default="pypi",
-    type=click.Choice(["pypi", "npm", "pub"]),
+    type=click.Choice(SUPPORTED_ECOSYSTEMS),
     help="Package ecosystem",
 )
 @click.option("--json", "use_json", is_flag=True, help="Output as JSON")
@@ -100,6 +118,19 @@ def _apply_global_flags(ctx, verbose, quiet):
     default=None,
     help="Analyze local source path instead of downloading from registry.",
 )
+@click.option(
+    "--emit-opensrc/--no-emit-opensrc",
+    "emit_opensrc",
+    default=None,
+    help="After a SAFE scan, write extracted bytes into ~/.opensrc/ (opensrc-compatible cache).",
+)
+@click.option(
+    "--opensrc-overwrite",
+    type=click.Choice(["never", "always", "when-aigate-wins"]),
+    default="never",
+    show_default=True,
+    help="Collision policy when --emit-opensrc hits an existing directory.",
+)
 @click.option("--verbose", "-V", is_flag=True, help="Enable debug logging.", hidden=True)
 @click.option("--quiet", "-q", is_flag=True, help="Suppress non-error output.", hidden=True)
 @click.pass_context
@@ -113,6 +144,8 @@ def check(
     level: str,
     skip_ai: bool,
     local_path: str | None,
+    emit_opensrc: bool | None,
+    opensrc_overwrite: str,
     verbose: bool,
     quiet: bool,
 ):
@@ -122,7 +155,18 @@ def check(
     """
     _apply_global_flags(ctx, verbose, quiet)
     asyncio.run(
-        _check(package, pkg_version, ecosystem, use_json, use_sarif, level, skip_ai, local_path)
+        _check(
+            package,
+            pkg_version,
+            ecosystem,
+            use_json,
+            use_sarif,
+            level,
+            skip_ai,
+            local_path,
+            emit_opensrc=emit_opensrc,
+            opensrc_overwrite=opensrc_overwrite,
+        )
     )
 
 
@@ -135,11 +179,17 @@ async def _check(
     level_str: str,
     skip_ai: bool,
     local_path: str | None = None,
+    *,
+    emit_opensrc: bool | None = None,
+    opensrc_overwrite: str = "never",
 ):
     config = Config.load()
     level = AnalysisLevel(level_str)
     start = time.monotonic()
     provenance = "local" if local_path else "registry"
+
+    oversized_msg = None  # Set by crates 200MB cap; force NEEDS_HUMAN_REVIEW below
+    source_unavailable_msg: str | None = None  # Phase 3: bytes-not-inspected gate
 
     if local_path:
         # Offline mode: skip registry, read local source directly
@@ -204,13 +254,57 @@ async def _check(
         # 2. Download source
         with console.status(f"Downloading {package.name}=={package.version}..."):
             try:
-                source_files = await download_source(package)
+                source_files = await download_source(
+                    package,
+                    max_archive_size_crates=config.resolver.max_archive_size_crates,
+                    github_token=config.github_token,
+                )
+            except ValueError as e:
+                # ``archive_oversized`` → record so we force NEEDS_HUMAN_REVIEW
+                # (PRD §2.5 S3: oversize must never produce SAFE).
+                msg = str(e)
+                if "archive_oversized" in msg:
+                    console.print(f"[yellow]Warning: {msg} — returning NEEDS_HUMAN_REVIEW[/yellow]")
+                    oversized_msg = msg
+                    source_files = {}
+                else:
+                    console.print(f"[yellow]Warning: Could not download source: {e}[/yellow]")
+                    source_files = {}
+            except SourceUnavailableError as e:
+                # Phase 3: bytes-not-inspected MUST NOT become SAFE
+                # (open-questions #10, Architect P1 #3).
+                msg = str(e)
+                console.print(f"[yellow]Warning: {msg} — returning NEEDS_HUMAN_REVIEW[/yellow]")
+                source_unavailable_msg = msg
+                source_files = {}
             except Exception as e:
                 console.print(f"[yellow]Warning: Could not download source: {e}[/yellow]")
                 source_files = {}
 
     # 3. Static pre-filter
     prefilter_result = run_prefilter(package, config, source_files)
+
+    # 3.1 Oversized-archive override — NEEDS_HUMAN_REVIEW (exit 1), PRD §2.5 S3.
+    # Never SAFE. Using MEDIUM risk keeps the policy mapping at NEEDS_REVIEW
+    # (exit 1); also skip AI so we don't pass empty-source prompts downstream.
+    if oversized_msg:
+        prefilter_result.risk_signals.append(f"archive_oversized(HIGH): {oversized_msg}")
+        prefilter_result.risk_level = RiskLevel.MEDIUM
+        prefilter_result.needs_ai_review = False
+        prefilter_result.passed = False
+        prefilter_result.reason = "Archive exceeds size cap; manual review required"
+        # Phase 3 retrofit: oversize = uninspected bytes; block SAFE downstream.
+        prefilter_result.source_unavailable = True
+
+    # 3.2 Source-unavailable override — Phase 3 (opensrc-integration-plan §3.3).
+    # Never SAFE: CocoaPods git source without GITHUB_TOKEN, npm 404, etc.
+    if source_unavailable_msg:
+        prefilter_result.risk_signals.append(f"source_unavailable(HIGH): {source_unavailable_msg}")
+        prefilter_result.risk_level = RiskLevel.MEDIUM
+        prefilter_result.needs_ai_review = False
+        prefilter_result.passed = False
+        prefilter_result.reason = "Source bytes unavailable; manual review required"
+        prefilter_result.source_unavailable = True
 
     # 3.5 Enrichment (optional — adds context to AI prompt)
     enrichment_result = None
@@ -265,7 +359,66 @@ async def _check(
         package.name, package.version, ecosystem, report, config.cache_dir, provenance=provenance
     )
 
+    # 6. Optional opensrc-compatible emit (Phase 1, opensrc-integration-plan)
+    await _maybe_emit_opensrc(
+        package=package,
+        source_files=source_files,
+        report=report,
+        config=config,
+        flag_override=emit_opensrc,
+        overwrite_policy=opensrc_overwrite,
+    )
+
     _print_report_and_exit(report, use_json, use_sarif)
+
+
+async def _maybe_emit_opensrc(
+    *,
+    package: PackageInfo,
+    source_files: dict[str, str],
+    report: AnalysisReport,
+    config: Config,
+    flag_override: bool | None,
+    overwrite_policy: str,
+    tarball_bytes: bytes | None = None,
+    tarball_url: str | None = None,
+) -> None:
+    """Guarded call to opensrc_cache.emit_to_opensrc_cache.
+
+    Gated by ``should_emit()``. Runs the synchronous emit in a worker thread so
+    we don't block the asyncio loop under ``Semaphore(5)``. Never raises — logs
+    and attaches the result to ``report.opensrc_emit``.
+    """
+    from .opensrc_cache import emit_to_opensrc_cache, should_emit
+
+    emit, reason = should_emit(report, config, flag_override=flag_override)
+    if not emit:
+        report.opensrc_emit = None if reason == "flag_off" else _emit_skipped(reason)
+        return
+
+    try:
+        result = await asyncio.to_thread(
+            emit_to_opensrc_cache,
+            package,
+            source_files,
+            report,
+            config,
+            overwrite_policy,
+            tarball_bytes,
+            tarball_url,
+        )
+    except Exception as exc:  # noqa: BLE001 — emit failure must never crash scan
+        import logging as _logging
+
+        _logging.getLogger(__name__).warning("opensrc-emit failed: %s", exc)
+        result = _emit_skipped(f"write_error: {exc}")
+    report.opensrc_emit = result
+
+
+def _emit_skipped(reason: str):
+    from .models import OpensrcEmitResult
+
+    return OpensrcEmitResult(emitted=False, reason=reason)
 
 
 def _scan_single_file(
@@ -410,7 +563,7 @@ def scan_dir_cmd(ctx, directory: str, staged: bool, use_json: bool, verbose: boo
     "--ecosystem",
     "-e",
     default=None,
-    type=click.Choice(["pypi", "npm", "pub"]),
+    type=click.Choice(SUPPORTED_ECOSYSTEMS),
     help="Override package ecosystem",
 )
 @click.option("--json", "use_json", is_flag=True, help="Output as JSON")
@@ -527,7 +680,7 @@ async def _scan(
     "--ecosystem",
     "-e",
     default="pypi",
-    type=click.Choice(["pypi", "npm", "pub"]),
+    type=click.Choice(SUPPORTED_ECOSYSTEMS),
     help="Package ecosystem",
 )
 @click.option("--json", "use_json", is_flag=True, help="Output as JSON")
@@ -574,8 +727,16 @@ async def _diff(
             old_pkg = await resolve_package(package_name, old_ver, ecosystem)
             new_pkg = await resolve_package(package_name, new_ver, ecosystem)
             old_files, new_files = await asyncio.gather(
-                download_source(old_pkg),
-                download_source(new_pkg),
+                download_source(
+                    old_pkg,
+                    max_archive_size_crates=config.resolver.max_archive_size_crates,
+                    github_token=config.github_token,
+                ),
+                download_source(
+                    new_pkg,
+                    max_archive_size_crates=config.resolver.max_archive_size_crates,
+                    github_token=config.github_token,
+                ),
             )
         except Exception as e:
             _emit_error(
@@ -864,7 +1025,36 @@ def doctor(ctx):
     else:
         console.print("  [dim]No AI tools detected for hook installation[/dim]")
 
-    # 5. Warm popular-packages cache (best-effort)
+    # 5. Filesystem outputs (opensrc-integration-plan §2.6 observability)
+    console.print("\n[bold]Filesystem outputs:[/bold]")
+    try:
+        from .opensrc_cache import list_filesystem_outputs
+
+        summary = list_filesystem_outputs(config.emit_opensrc)
+        console.print(f"  opensrc cache: {summary['cache_dir']}")
+        if summary["exists"]:
+            console.print(
+                f"  [green]\u2713[/green] sources.json: "
+                f"{'valid' if summary['sources_json_valid'] else 'missing or corrupt'}"
+            )
+            console.print(
+                f"    packages tracked: {summary['total_packages']} "
+                f"(aigate-origin: {summary['aigate_origin']}, "
+                f"opensrc-origin: {summary['opensrc_origin']})"
+            )
+            if summary.get("last_write"):
+                console.print(f"    last write: {summary['last_write']}")
+        else:
+            console.print("  [dim]cache does not exist yet (never emitted)[/dim]")
+        console.print(
+            f"  emit_opensrc.enabled: "
+            f"{'yes' if config.emit_opensrc.enabled else 'no'} "
+            f"(on_collision={config.emit_opensrc.on_collision})"
+        )
+    except (OSError, ValueError) as exc:
+        console.print(f"  [yellow]doctor: filesystem-outputs inspection failed: {exc}[/yellow]")
+
+    # 6. Warm popular-packages cache (best-effort)
     import asyncio as _asyncio_doc
 
     from .rules.popular_packages import get_popular_packages as _get_pop_doc
@@ -1013,6 +1203,10 @@ def _infer_ecosystem(path: str) -> str:
         return "npm"
     if name == "pubspec.lock":
         return "pub"
+    if name == "cargo.lock":
+        return "crates"
+    if name == "podfile.lock":
+        return "cocoapods"
     return "pypi"
 
 
@@ -1076,8 +1270,61 @@ def _parse_lockfile(path: str) -> list[tuple[str, str]]:
                 ver = stripped.split("version:")[1].strip().strip('"')
                 packages.append((current_name, ver))
                 current_name = None
+    elif p.name == "Cargo.lock":
+        # Cargo.lock is TOML, one [[package]] table per dependency.
+        # We only scan crates.io-registry entries; git deps, path deps, and
+        # workspace members are skipped (different trust / resolution).
+        data = tomllib.loads(p.read_text())
+        for package in data.get("package", []):
+            name = str(package.get("name", "")).strip()
+            version = str(package.get("version", "")).strip()
+            source = str(package.get("source", "")).strip()
+            if not name or not version:
+                continue
+            # source is present and points at the crates.io sparse OR legacy index
+            if source.startswith("registry+"):
+                packages.append((name, version))
+    elif p.name.lower() == "podfile.lock":
+        # Podfile.lock is YAML with PODS:, DEPENDENCIES:, EXTERNAL SOURCES:,
+        # SPEC REPOS:, CHECKOUT OPTIONS:, SPEC CHECKSUMS:, PODFILE CHECKSUM:,
+        # COCOAPODS: sections. Phase 3 scope: parse the ``PODS:`` list and
+        # resolve top-level pods. Subspecs (``AFNetworking/Security``) share
+        # the parent version so we dedupe by parent name.
+        data = yaml.safe_load(p.read_text()) or {}
+        pods = data.get("PODS") or []
+        external = set((data.get("EXTERNAL SOURCES") or {}).keys())
+        for entry in pods:
+            # Each entry is either a string like "AFNetworking (4.0.1)" or a
+            # mapping {"AFNetworking (4.0.1)": [dep, dep, ...]}.
+            if isinstance(entry, dict):
+                for key in entry:
+                    name, version = _parse_podfile_entry(str(key))
+                    if name and version and name not in external:
+                        packages.append((name, version))
+            else:
+                name, version = _parse_podfile_entry(str(entry))
+                if name and version and name not in external:
+                    packages.append((name, version))
 
     return _dedupe_packages(packages)
+
+
+def _parse_podfile_entry(raw: str) -> tuple[str, str]:
+    """Parse a single Podfile.lock PODS entry to ``(name, version)``.
+
+    Handles shapes:
+    * ``AFNetworking (4.0.1)`` -> ``("AFNetworking", "4.0.1")``
+    * ``AFNetworking/Security (4.0.1)`` -> ``("AFNetworking", "4.0.1")`` (subspec)
+    * ``AFNetworking (= 4.0.1)`` -> ``("AFNetworking", "4.0.1")``
+    """
+    text = raw.strip()
+    match = re.match(r"^([^\s()]+)\s*\(\s*=?\s*([^\s()]+)\s*\)\s*$", text)
+    if not match:
+        return "", ""
+    raw_name = match.group(1).strip()
+    # Drop any subspec path component — scan at the parent-pod level.
+    parent = raw_name.split("/", 1)[0]
+    return parent, match.group(2).strip()
 
 
 async def _scan_dependency(
@@ -1091,9 +1338,29 @@ async def _scan_dependency(
     start = time.monotonic()
     package = PackageInfo(name=name, version=version, ecosystem=ecosystem)
 
+    oversized_msg: str | None = None
+    source_unavailable_msg: str | None = None
     try:
         package = await resolve_package(name, version, ecosystem, client=client)
-        source_files = await download_source(package, client=client)
+        try:
+            source_files = await download_source(
+                package,
+                client=client,
+                max_archive_size_crates=config.resolver.max_archive_size_crates,
+                github_token=config.github_token,
+            )
+        except ValueError as e:
+            # See ``_check`` — crates archive_oversized degrades to NEEDS_REVIEW.
+            msg = str(e)
+            if "archive_oversized" in msg:
+                oversized_msg = msg
+                source_files = {}
+            else:
+                raise
+        except SourceUnavailableError as e:
+            # Phase 3: bytes-not-inspected gate — never SAFE.
+            source_unavailable_msg = str(e)
+            source_files = {}
     except Exception as e:
         report = AnalysisReport(
             package=package,
@@ -1110,6 +1377,22 @@ async def _scan_dependency(
         }
 
     prefilter = run_prefilter(package, config, source_files)
+
+    if oversized_msg:
+        prefilter.risk_signals.append(f"archive_oversized(HIGH): {oversized_msg}")
+        prefilter.risk_level = RiskLevel.MEDIUM
+        prefilter.needs_ai_review = False
+        prefilter.passed = False
+        prefilter.reason = "Archive exceeds size cap; manual review required"
+        prefilter.source_unavailable = True
+
+    if source_unavailable_msg:
+        prefilter.risk_signals.append(f"source_unavailable(HIGH): {source_unavailable_msg}")
+        prefilter.risk_level = RiskLevel.MEDIUM
+        prefilter.needs_ai_review = False
+        prefilter.passed = False
+        prefilter.reason = "Source bytes unavailable; manual review required"
+        prefilter.source_unavailable = True
     consensus = None
     enrichment_result = None
     error = ""
@@ -1344,6 +1627,7 @@ def _report_from_cached(
         risk_signals=prefilter_data.get("risk_signals", []),
         risk_level=RiskLevel(prefilter_data.get("risk_level", "none")),
         needs_ai_review=prefilter_data.get("needs_ai_review", False),
+        source_unavailable=prefilter_data.get("source_unavailable", False),
     )
 
     consensus = None
