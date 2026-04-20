@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 from collections.abc import Sequence
@@ -13,6 +14,8 @@ from .rules.behavior_chains import detect_behavior_chains
 from .rules.compound import check_compound_signals
 from .rules.loader import Rule, load_rules
 from .rules.popular_packages import _read_cache
+
+logger = logging.getLogger(__name__)
 
 # Module-level cache: loaded once, reused for all calls.
 _CACHED_RULES: list[Rule] | None = None
@@ -199,6 +202,50 @@ POPULAR_NUGET: set[str] = {
     "NUnit",
 }
 
+POPULAR_COCOAPODS: set[str] = {
+    "AFNetworking",
+    "Alamofire",
+    "SDWebImage",
+    "SnapKit",
+    "RxSwift",
+    "RxCocoa",
+    "Kingfisher",
+    "Realm",
+    "ReactiveCocoa",
+    "Masonry",
+    "FBSDKCoreKit",
+    "Firebase",
+    "FirebaseAnalytics",
+    "FirebaseAuth",
+    "GoogleSignIn",
+    "Lottie",
+    "MBProgressHUD",
+    "SwiftLint",
+    "Sentry",
+    "Stripe",
+}
+
+POPULAR_JSR: set[str] = {
+    # JSR scopes (the @std/* ecosystem dominates)
+    "@std/fs",
+    "@std/path",
+    "@std/http",
+    "@std/encoding",
+    "@std/async",
+    "@std/log",
+    "@std/uuid",
+    "@std/json",
+    "@std/yaml",
+    "@std/text",
+    "@std/datetime",
+    "@std/cli",
+    "@std/io",
+    "@std/streams",
+    "@std/testing",
+    "@oak/oak",
+    "@hono/hono",
+}
+
 
 # Note: Dangerous patterns are now loaded from YAML rules via _get_rules().
 # See src/aigate/rules/builtin/ for the rule definitions.
@@ -315,16 +362,32 @@ def check_typosquatting(name: str, ecosystem: str) -> list[str]:
     available, otherwise falls back to the hardcoded sets above.
     """
     # Always start with hardcoded sets (guaranteed baseline)
+    # Reviewer bug_011 / US-010: keys must match resolver's canonicalized
+    # ecosystem strings. resolver normalizes Rust to "crates" not "cargo";
+    # cocoapods/jsr were added in this PR but never indexed here. Unknown
+    # ecosystems fall back to an EMPTY set (not POPULAR_PYPI) to avoid
+    # cross-ecosystem similarity false positives.
     popular_map: dict[str, set[str]] = {
         "pypi": POPULAR_PYPI,
         "npm": POPULAR_NPM,
-        "cargo": POPULAR_CARGO,
+        "crates": POPULAR_CARGO,
+        "cargo": POPULAR_CARGO,  # legacy alias retained for back-compat
         "gem": POPULAR_GEM,
         "composer": POPULAR_COMPOSER,
         "go": POPULAR_GO,
         "nuget": POPULAR_NUGET,
+        "cocoapods": POPULAR_COCOAPODS,
+        "pods": POPULAR_COCOAPODS,  # alias matching resolver's accepted forms
+        "jsr": POPULAR_JSR,
     }
-    popular = set(popular_map.get(ecosystem, POPULAR_PYPI))
+    if ecosystem not in popular_map:
+        logger.warning(
+            "check_typosquatting: no popular_map entry for ecosystem '%s' "
+            "— skipping typosquat check",
+            ecosystem,
+        )
+        return []
+    popular = popular_map[ecosystem]
 
     # Merge with dynamic cache if available (extends, never replaces)
     cached = _read_cache(ecosystem)
