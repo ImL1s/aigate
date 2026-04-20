@@ -174,6 +174,80 @@ class TestShouldEmit:
         assert ok is False
         assert reason == "source_unavailable"
 
+    def test_should_emit_refuses_high_prefilter_when_no_consensus(self, tmp_path: Path):
+        """US-003 / Reviewer IMP-4: --skip-ai + prefilter HIGH must not emit.
+
+        Without this gate, a malicious crates package with build.rs+reqwest
+        flagged HIGH at the prefilter layer (decision = MALICIOUS, exit 2)
+        would still write its bytes to ~/.opensrc/ when --emit-opensrc is set,
+        because should_emit only inspected the consensus verdict. AI-agents
+        reading the cache would see the malicious package as a legitimate
+        source.
+        """
+        cfg = _make_config(tmp_root=tmp_path, enabled=True)
+        pkg = PackageInfo(
+            name="evil-crate",
+            version="0.1.0",
+            ecosystem="crates",
+            repository="",
+        )
+        rpt = AnalysisReport(
+            package=pkg,
+            prefilter=PrefilterResult(
+                passed=False,
+                reason="build.rs + network call detected",
+                risk_level=RiskLevel.HIGH,
+                risk_signals=["dangerous_pattern(HIGH): 'build.rs:reqwest' …"],
+                needs_ai_review=True,
+            ),
+            consensus=None,  # --skip-ai path
+        )
+        ok, reason = should_emit(rpt, cfg, flag_override=True)
+        assert ok is False
+        assert reason == "prefilter_high_risk"
+
+    def test_should_emit_refuses_critical_prefilter_when_no_consensus(self, tmp_path: Path):
+        """US-003: same gate fires for CRITICAL too (e.g. blocklisted package)."""
+        cfg = _make_config(tmp_root=tmp_path, enabled=True)
+        pkg = PackageInfo(name="known-bad", version="1.0", ecosystem="npm", repository="")
+        rpt = AnalysisReport(
+            package=pkg,
+            prefilter=PrefilterResult(
+                passed=False,
+                reason="blocklist hit",
+                risk_level=RiskLevel.CRITICAL,
+                risk_signals=["blocklist(CRITICAL): known-bad"],
+                needs_ai_review=False,
+            ),
+            consensus=None,
+        )
+        ok, reason = should_emit(rpt, cfg, flag_override=True)
+        assert ok is False
+        assert reason == "prefilter_high_risk"
+
+    def test_should_emit_allows_high_prefilter_when_consensus_says_safe(self, tmp_path: Path):
+        """US-003: when AI ran AND said SAFE, prefilter signals are by design
+        overridden — the prefilter HIGH gate is for the no-consensus path only."""
+        cfg = _make_config(tmp_root=tmp_path, enabled=True)
+        pkg = PackageInfo(name="x", version="1.0", ecosystem="pypi", repository="")
+        rpt = AnalysisReport(
+            package=pkg,
+            prefilter=PrefilterResult(
+                passed=False,
+                reason="prefilter HIGH but AI cleared",
+                risk_level=RiskLevel.HIGH,
+                risk_signals=["dangerous_pattern(HIGH): false-positive"],
+                needs_ai_review=True,
+            ),
+            consensus=ConsensusResult(
+                final_verdict=Verdict.SAFE,
+                confidence=0.95,
+                summary="AI cleared the false-positive",
+            ),
+        )
+        ok, _ = should_emit(rpt, cfg, flag_override=True)
+        assert ok is True
+
 
 # ---------------------------------------------------------------------------
 # Collision policy — T-COL-1..T-COL-6

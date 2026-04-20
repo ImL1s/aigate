@@ -34,7 +34,7 @@ from typing import Any
 
 from . import __version__
 from .config import Config, EmitOpensrcConfig
-from .models import AnalysisReport, OpensrcEmitResult, PackageInfo, Verdict
+from .models import AnalysisReport, OpensrcEmitResult, PackageInfo, RiskLevel, Verdict
 
 logger = logging.getLogger(__name__)
 
@@ -251,6 +251,17 @@ def should_emit(
     # Cross-ecosystem source_unavailable gate (open-questions #10)
     if _is_source_unavailable(report):
         return False, "source_unavailable"
+
+    # Skip-AI fallthrough: when consensus is None (e.g. --skip-ai run) and
+    # the prefilter alone flagged HIGH/CRITICAL, the package is malicious
+    # by aigate's own exit code (2). Emitting those bytes to ~/.opensrc/
+    # would turn the cache into a malware-distribution vector for AI agents
+    # that read it. Reviewer IMP-4 / US-003.
+    if report.consensus is None and report.prefilter.risk_level in (
+        RiskLevel.HIGH,
+        RiskLevel.CRITICAL,
+    ):
+        return False, "prefilter_high_risk"
 
     return True, "ok"
 
