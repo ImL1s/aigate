@@ -34,7 +34,7 @@ from typing import Any
 
 from . import __version__
 from .config import Config, EmitOpensrcConfig
-from .models import AnalysisReport, OpensrcEmitResult, PackageInfo, RiskLevel, Verdict
+from .models import AnalysisReport, OpensrcEmitResult, PackageInfo, Verdict
 
 logger = logging.getLogger(__name__)
 
@@ -252,16 +252,15 @@ def should_emit(
     if _is_source_unavailable(report):
         return False, "source_unavailable"
 
-    # Skip-AI fallthrough: when consensus is None (e.g. --skip-ai run) and
-    # the prefilter alone flagged HIGH/CRITICAL, the package is malicious
-    # by aigate's own exit code (2). Emitting those bytes to ~/.opensrc/
-    # would turn the cache into a malware-distribution vector for AI agents
-    # that read it. Reviewer IMP-4 / US-003.
-    if report.consensus is None and report.prefilter.risk_level in (
-        RiskLevel.HIGH,
-        RiskLevel.CRITICAL,
-    ):
-        return False, "prefilter_high_risk"
+    # AI consensus required: opensrc trust model promises bytes are vetted by
+    # multi-model AI consensus before being made available (see instructions.py
+    # AIGATE_INSTRUCTION). When consensus is None (--skip-ai run, or AI failure
+    # silently swallowed) we cannot honour that promise — the sentinel would
+    # claim scan_verdict=safe by enum default but no AI ever ran. This also
+    # catches the prefilter-HIGH+skip-ai case (was US-003 prefilter_high_risk;
+    # now subsumed by the broader gate). Reviewer bug_004 / US-007.
+    if report.consensus is None:
+        return False, "ai_consensus_skipped"
 
     return True, "ok"
 
@@ -560,9 +559,17 @@ def emit_to_opensrc_cache(
     rel_path, used_fallback = derive_path(package)
     target_dir = cache_root / rel_path
 
-    verdict = Verdict.SAFE
-    if report.consensus:
+    # Verdict for collision policy (Verdict enum); scan_verdict_label for the
+    # sentinel (string). Defence-in-depth: should_emit already refuses when
+    # consensus is None, but a direct caller bypassing should_emit must NOT
+    # produce a sentinel that claims scan_verdict="safe" (Reviewer bug_004).
+    if report.consensus is not None:
         verdict = report.consensus.final_verdict
+        scan_verdict_label = verdict.value
+    else:
+        # No AI consensus → record explicit "unanalyzed" rather than SAFE-by-default
+        verdict = Verdict.SAFE  # collision-policy treats SAFE as "may overwrite"
+        scan_verdict_label = "unanalyzed"
 
     sha256 = _compute_sha256(tarball_bytes, source_files)
     action = _collision_policy(target_dir, sha256, verdict, policy)
@@ -589,7 +596,7 @@ def emit_to_opensrc_cache(
                 target_dir,
                 package,
                 tarball_sha256=sha256,
-                verdict=verdict.value,
+                verdict=scan_verdict_label,
                 tarball_url=tarball_url,
             )
 

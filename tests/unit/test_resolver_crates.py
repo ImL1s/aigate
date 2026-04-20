@@ -146,19 +146,34 @@ class TestResolveCrates:
 
     @pytest.mark.asyncio
     async def test_resolve_crates_specific_version(self, monkeypatch):
-        """version-specific endpoint returns a ``version`` object."""
+        """version-specific endpoint returns ``{version: {...}}`` only — NO
+        crate-level fields. US-009: we now fetch the crate-wide endpoint in
+        parallel so version-pinned lookups still get repository/homepage."""
         responses = {
+            # Crate-wide payload (US-009: required for version-pinned metadata)
+            f"{CRATES_API}/serde": _FakeResponse(
+                json_data={
+                    "crate": {
+                        "name": "serde",
+                        "max_stable_version": "1.0.200",
+                        "max_version": "1.0.200",
+                        "description": "Serialization framework",
+                        "homepage": "https://serde.rs",
+                        "repository": "https://github.com/serde-rs/serde",
+                    },
+                    "versions": [{"num": "1.0.200", "yanked": False}],
+                }
+            ),
+            # Per-version payload — real API shape: NO repository/homepage here
             f"{CRATES_API}/serde/1.0.200": _FakeResponse(
                 json_data={
                     "version": {
                         "num": "1.0.200",
                         "yanked": False,
                         "authors": ["David Tolnay"],
-                        "description": "Serialization framework",
-                        "repository": "https://github.com/serde-rs/serde",
                     }
                 }
-            )
+            ),
         }
         monkeypatch.setattr(
             "aigate.resolver.httpx.AsyncClient",
@@ -168,7 +183,51 @@ class TestResolveCrates:
         pkg = await _resolve_crates("serde", "1.0.200")
 
         assert pkg.version == "1.0.200"
+        # repository now sourced from crate-wide endpoint
         assert pkg.repository == "https://github.com/serde-rs/serde"
+        assert pkg.homepage == "https://serde.rs"
+        assert pkg.description == "Serialization framework"
+
+    @pytest.mark.asyncio
+    async def test_resolve_crates_version_pinned_populates_crate_metadata(self, monkeypatch):
+        """US-009 / Reviewer bug_018: version-pinned lookup must populate
+        repository even when the per-version response lacks it (which is the
+        ACTUAL shape returned by crates.io's /api/v1/crates/{n}/{v} endpoint).
+
+        Before the fix, `aigate check serde -v 1.0.200 --emit-opensrc` would
+        emit under repos/registry.crates/serde/1.0.200/ while the versionless
+        form emitted under repos/github.com/serde-rs/serde/1.0.200/ —
+        divergent canonical paths for the same package.
+        """
+        responses = {
+            f"{CRATES_API}/tokio": _FakeResponse(
+                json_data={
+                    "crate": {
+                        "name": "tokio",
+                        "repository": "https://github.com/tokio-rs/tokio",
+                        "homepage": "https://tokio.rs",
+                        "description": "Async runtime",
+                    },
+                    "versions": [{"num": "1.40.0", "yanked": False}],
+                }
+            ),
+            f"{CRATES_API}/tokio/1.40.0": _FakeResponse(
+                json_data={
+                    # Real-shape per-version payload: NO repository, NO homepage
+                    "version": {"num": "1.40.0", "yanked": False, "authors": ["Tokio Contributors"]}
+                }
+            ),
+        }
+        monkeypatch.setattr(
+            "aigate.resolver.httpx.AsyncClient",
+            lambda **_: _FakeAsyncClient(responses),
+        )
+
+        pkg = await _resolve_crates("tokio", "1.40.0")
+
+        assert pkg.repository == "https://github.com/tokio-rs/tokio"
+        assert pkg.homepage == "https://tokio.rs"
+        assert pkg.description == "Async runtime"
 
     @pytest.mark.asyncio
     async def test_resolve_crates_404_raises(self, monkeypatch):
@@ -185,8 +244,18 @@ class TestResolveCrates:
 
     @pytest.mark.asyncio
     async def test_resolve_crates_yanked_warning(self, monkeypatch, caplog):
-        """Yanked version logs a warning but still returns metadata."""
+        """Yanked version logs a warning but still returns metadata.
+
+        US-009: version-pinned lookup now also fetches the crate-wide endpoint
+        so the fixture must include both URLs.
+        """
         responses = {
+            f"{CRATES_API}/evil": _FakeResponse(
+                json_data={
+                    "crate": {"name": "evil", "max_stable_version": "9.9.9"},
+                    "versions": [{"num": "9.9.9", "yanked": True}],
+                }
+            ),
             f"{CRATES_API}/evil/9.9.9": _FakeResponse(
                 json_data={
                     "version": {
@@ -195,7 +264,7 @@ class TestResolveCrates:
                         "authors": ["nobody"],
                     }
                 }
-            )
+            ),
         }
         monkeypatch.setattr(
             "aigate.resolver.httpx.AsyncClient",
