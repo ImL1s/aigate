@@ -17,11 +17,17 @@ from aigate.models import (
 from aigate.policy import (
     PolicyOutcome,
     aggregate_decisions,
+    decision_from_dynamic_trace,
     decision_from_error,
     decision_from_prefilter,
     decision_from_report,
 )
 from aigate.reporters.json_reporter import JsonReporter
+from aigate.sandbox.types import (
+    DynamicTrace,
+    DynamicTraceEvent,
+    SandboxCoverage,
+)
 
 
 def _package() -> PackageInfo:
@@ -280,3 +286,262 @@ def test_decision_from_report_source_available_unchanged():
 
     assert decision.outcome == PolicyOutcome.SAFE
     assert decision.exit_code == 0
+
+
+# ---------------------------------------------------------------------------
+# Sandbox dynamic-trace policy — PRD v3.1 §3.2 / §3.5 — Phase 1 scaffold
+# ---------------------------------------------------------------------------
+
+
+def _noisy_events(
+    *,
+    severity: RiskLevel = RiskLevel.NONE,
+    kinds: tuple[str, ...] = ("exec", "open", "connect"),
+) -> list[DynamicTraceEvent]:
+    """Trace-event list that clears the PRD P0-2 floor (≥3 distinct kinds)."""
+    return [
+        DynamicTraceEvent(
+            kind=kind,
+            ts_ms=i * 10,
+            pid=1000 + i,
+            process="npm",
+            argv=["npm", "install"],
+            target=f"/tmp/evidence-{i}",
+            severity=severity,
+        )
+        for i, kind in enumerate(kinds)
+    ]
+
+
+def test_decision_from_dynamic_trace_none_returns_none():
+    assert decision_from_dynamic_trace(None) is None
+
+
+def test_decision_from_dynamic_trace_clean_run_returns_none():
+    """A noisy, clean, non-quiet trace should NOT downgrade a consensus SAFE."""
+    trace = DynamicTrace(
+        ran=True,
+        runtime="birdcage",
+        duration_ms=3000,
+        events=_noisy_events(),
+    )
+    assert decision_from_dynamic_trace(trace) is None
+
+
+def test_decision_from_dynamic_trace_canary_touch_is_malicious():
+    """PRD §3.2 P0-1: one canary read = unambiguous MALICIOUS."""
+    trace = DynamicTrace(
+        ran=True,
+        runtime="birdcage",
+        duration_ms=2500,
+        events=_noisy_events(),
+        canary_touches=["<CANARY_REF_0>"],
+    )
+    decision = decision_from_dynamic_trace(trace)
+    assert decision is not None
+    assert decision.outcome == PolicyOutcome.MALICIOUS
+    assert decision.exit_code == 2
+    assert decision.should_block_install is True
+
+
+def test_decision_from_dynamic_trace_high_severity_event_is_malicious():
+    trace = DynamicTrace(
+        ran=True,
+        runtime="docker",
+        duration_ms=2500,
+        events=_noisy_events(severity=RiskLevel.HIGH),
+    )
+    decision = decision_from_dynamic_trace(trace)
+    assert decision is not None
+    assert decision.outcome == PolicyOutcome.MALICIOUS
+    assert decision.exit_code == 2
+    assert decision.should_block_install is True
+
+
+def test_decision_from_dynamic_trace_medium_severity_event_needs_review():
+    trace = DynamicTrace(
+        ran=True,
+        runtime="docker",
+        duration_ms=2500,
+        events=_noisy_events(severity=RiskLevel.MEDIUM),
+    )
+    decision = decision_from_dynamic_trace(trace)
+    assert decision is not None
+    assert decision.outcome == PolicyOutcome.NEEDS_REVIEW
+    assert decision.exit_code == 1
+    assert decision.should_block_install is False
+
+
+def test_decision_from_dynamic_trace_observation_failure_needs_review():
+    """``skipped_unexpected`` is the fail-closed parallel of source_unavailable."""
+    trace = DynamicTrace(
+        ran=True,
+        runtime="birdcage",
+        duration_ms=2500,
+        events=_noisy_events(),
+        skipped_unexpected={SandboxCoverage.NETWORK_CAPTURE},
+    )
+    decision = decision_from_dynamic_trace(trace)
+    assert decision is not None
+    assert decision.outcome == PolicyOutcome.NEEDS_REVIEW
+    assert decision.exit_code == 1
+
+
+def test_decision_from_dynamic_trace_backend_error_needs_review():
+    trace = DynamicTrace(
+        ran=False,
+        runtime="none",
+        error="sandbox_unavailable: docker not installed",
+        skipped_unexpected={
+            SandboxCoverage.SYSCALL_TRACE,
+            SandboxCoverage.NETWORK_CAPTURE,
+        },
+    )
+    decision = decision_from_dynamic_trace(trace)
+    assert decision is not None
+    assert decision.outcome == PolicyOutcome.NEEDS_REVIEW
+    assert "docker not installed" in decision.reason
+
+
+def test_decision_from_dynamic_trace_floor_violation_needs_review():
+    """PRD P0-2: ≥2s run + <3 distinct kinds AND <10 events → floor trip."""
+    trace = DynamicTrace(
+        ran=True,
+        runtime="birdcage",
+        duration_ms=3000,
+        events=[
+            DynamicTraceEvent(kind="open", ts_ms=0, pid=1, process="sh", argv=["sh"]),
+        ],
+    )
+    decision = decision_from_dynamic_trace(trace)
+    assert decision is not None
+    assert decision.outcome == PolicyOutcome.NEEDS_REVIEW
+
+
+def test_decision_from_dynamic_trace_quiet_run_needs_review():
+    """PRD P0-2 heuristic: 0 net + 0 ext-write + ≤1 exec → suspicious_quiet_run."""
+    # duration < 2s so floor rule does NOT apply; only quiet-run fires.
+    trace = DynamicTrace(
+        ran=True,
+        runtime="birdcage",
+        duration_ms=500,
+        events=[
+            DynamicTraceEvent(kind="open", ts_ms=0, pid=1, process="node", argv=["node"]),
+        ],
+    )
+    decision = decision_from_dynamic_trace(trace)
+    assert decision is not None
+    assert decision.outcome == PolicyOutcome.NEEDS_REVIEW
+    assert "quiet" in decision.reason.lower()
+
+
+def test_decision_from_report_sandbox_canary_overrides_safe_consensus():
+    """Structured sandbox field must escalate past a SAFE consensus.
+
+    Mirrors the ``source_unavailable`` invariant: actively-malicious bytes
+    can never resolve to SAFE even with a high-confidence AI SAFE vote.
+    """
+    trace = DynamicTrace(
+        ran=True,
+        runtime="birdcage",
+        duration_ms=2500,
+        events=_noisy_events(),
+        canary_touches=["<CANARY_REF_0>"],
+    )
+    report = AnalysisReport(
+        package=_package(),
+        prefilter=PrefilterResult(
+            passed=True,
+            reason="clean",
+            risk_level=RiskLevel.NONE,
+        ),
+        consensus=ConsensusResult(
+            final_verdict=Verdict.SAFE,
+            confidence=0.95,
+            summary="(should be overridden by canary signal)",
+        ),
+        dynamic_trace=trace,
+    )
+
+    decision = decision_from_report(report)
+
+    assert decision.outcome == PolicyOutcome.MALICIOUS
+    assert decision.exit_code == 2
+    assert decision.should_block_install is True
+
+
+def test_decision_from_report_sandbox_observation_failure_promotes_to_review():
+    trace = DynamicTrace(
+        ran=True,
+        runtime="birdcage",
+        duration_ms=2500,
+        events=_noisy_events(),
+        skipped_unexpected={SandboxCoverage.NETWORK_CAPTURE},
+    )
+    report = AnalysisReport(
+        package=_package(),
+        prefilter=PrefilterResult(
+            passed=True,
+            reason="clean",
+            risk_level=RiskLevel.NONE,
+        ),
+        consensus=ConsensusResult(
+            final_verdict=Verdict.SAFE,
+            confidence=0.9,
+            summary="(should be promoted to review)",
+        ),
+        dynamic_trace=trace,
+    )
+
+    decision = decision_from_report(report)
+
+    assert decision.outcome == PolicyOutcome.NEEDS_REVIEW
+    assert decision.exit_code == 1
+
+
+def test_decision_from_report_sandbox_clean_trace_preserves_safe():
+    trace = DynamicTrace(
+        ran=True,
+        runtime="birdcage",
+        duration_ms=3000,
+        events=_noisy_events(),
+    )
+    report = AnalysisReport(
+        package=_package(),
+        prefilter=PrefilterResult(
+            passed=True,
+            reason="clean",
+            risk_level=RiskLevel.NONE,
+        ),
+        consensus=ConsensusResult(
+            final_verdict=Verdict.SAFE,
+            confidence=0.95,
+            summary="all safe",
+        ),
+        dynamic_trace=trace,
+    )
+
+    decision = decision_from_report(report)
+
+    assert decision.outcome == PolicyOutcome.SAFE
+    assert decision.exit_code == 0
+
+
+def test_decision_from_report_no_dynamic_trace_unchanged_behaviour():
+    """AnalysisReport.dynamic_trace=None must not affect the existing verdict."""
+    report = AnalysisReport(
+        package=_package(),
+        prefilter=PrefilterResult(
+            passed=False,
+            reason="high risk",
+            risk_level=RiskLevel.HIGH,
+            risk_signals=["signal"],
+            needs_ai_review=True,
+        ),
+        dynamic_trace=None,
+    )
+
+    decision = decision_from_report(report)
+
+    assert decision.outcome == PolicyOutcome.MALICIOUS
+    assert decision.exit_code == 2

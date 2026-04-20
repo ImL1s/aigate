@@ -272,11 +272,48 @@ Beyond package registries, aigate also warns on:
 | [AI Tool Integration](docs/ai-tool-integration.md) | All 9 tools, LLM instructions, hooks |
 | [Configuration](docs/configuration.md) | Full `.aigate.yml` reference |
 | [Attack Detection](docs/attack-detection.md) | Supported attacks, E2E testing |
+| [Sandbox Mode](docs/sandbox.md) | Observe-not-deny dynamic tracing, coverage matrix, macOS gap |
 | [GitHub Action](docs/github-action.md) | CI/CD integration, SARIF output |
 | [npm Integration](docs/npm-integration.md) | npm/yarn/pnpm setup |
 | [Pre-Commit Hook](#pre-commit-hook) | Pre-commit integration via `scan-dir` |
 | [Security Policy](SECURITY.md) | Vulnerability reporting |
 | [Contributing](CONTRIBUTING.md) | Dev setup, testing, E2E sandbox |
+
+## Sandbox Mode
+
+> Status: **Phase 1 scaffold.** The `--sandbox` flag is wired up; backends
+> emit empty `DynamicTrace` objects until Phase 2. See
+> [docs/sandbox.md](docs/sandbox.md) for the full contract.
+
+aigate can run `pip install` / `npm install` / `cargo build` inside an
+**observe-not-deny** sandbox and feed the resulting dynamic trace into the
+AI consensus prompt:
+
+```bash
+aigate check <package> --sandbox           # tier-1: Birdcage (Landlock / sandbox-exec)
+aigate check <package> --sandbox=strict    # tier-2: Docker + Tracee (stronger, needs Docker)
+```
+
+Instead of denying writes to `~/.bashrc`, `~/.ssh/id_rsa`, etc. (which
+would let malicious packages launder EACCES into SAFE), sensitive paths are
+**decoy bind-mounts** on Linux and **scratch-`$HOME` redirects** on macOS.
+Writes succeed against the decoy; reads of unique canary tokens fire
+`canary_touched(HIGH)`; outbound traffic carrying a canary fires
+`canary_exfil(HIGH)`.
+
+Coverage is published transparently — see the
+[PRD v3.1 §3.2 matrix](docs/sandbox.md#coverage-matrix-prd-v31-32) for the
+authoritative list of COVERED / PARTIAL / `OUT_OF_SCOPE_v1` classes.
+
+**macOS absolute-path-write gap:** because `sandbox-exec` has no bind-mount
+primitive, macOS Birdcage light mode cannot redirect **hardcoded absolute
+writes outside `$HOME`** (e.g. a package writing `/etc/cron.d/evil` by
+absolute path). Those writes hit the SBPL deny rule and fail silently;
+Phase 1 marks this as a documented `CANARY_ABSOLUTE_PATH_WRITES` skip in
+`DynamicTrace.skipped_expected`, and `aigate check <pkg> --sandbox=strict`
+closes the gap via the Docker+Tracee tier. All other canary classes
+(credential reads, shell-RC writes via `$HOME`, persistence autostart in
+`~/Library/LaunchAgents`) are covered symmetrically on macOS and Linux.
 
 ## Pre-Commit Hook
 

@@ -97,3 +97,167 @@ class TestLoad:
         monkeypatch.chdir("/tmp")
         c = Config.load(None)
         assert isinstance(c, Config)
+
+
+# ---------------------------------------------------------------------------
+# Sandbox config — PRD v3.1 §3.4 — Phase 1 scaffold
+# ---------------------------------------------------------------------------
+
+
+class TestSandboxConfig:
+    def test_default_sandbox_is_opt_in(self):
+        c = Config.default()
+        assert hasattr(c, "sandbox")
+        # PRD Principle 1: sandbox is OPT-IN. Default must stay False.
+        assert c.sandbox.enabled is False
+
+    def test_default_sandbox_mode_and_runtime(self):
+        c = Config.default()
+        assert c.sandbox.mode == "auto"
+        assert c.sandbox.runtime == "auto"
+        assert c.sandbox.required is False
+
+    def test_default_network_policy_is_deny_outbound(self):
+        # PRD §3.4 v3 P0-3: deny-outbound is the shipped default.
+        c = Config.default()
+        assert c.sandbox.network_policy == "deny-outbound"
+        assert c.sandbox.install_source == "tarball"
+
+    def test_default_command_gates_invert_check_and_scan(self):
+        # PRD Architect req #1: check eager=True, scan eager=False.
+        c = Config.default()
+        assert c.sandbox.check.eager is True
+        assert c.sandbox.check.min_prefilter_severity == "none"
+        assert c.sandbox.scan.eager is False
+        assert c.sandbox.scan.min_prefilter_severity == "medium"
+        assert c.sandbox.scan.cost_budget_s == 900
+        assert c.sandbox.scan.budget_exhausted_action == "suspend_scan"
+
+    def test_default_observation_captures_all_surfaces(self):
+        c = Config.default()
+        obs = c.sandbox.observation
+        assert obs.capture_dns is True
+        assert obs.capture_tls is True
+        assert obs.capture_fs_writes is True
+        assert obs.capture_env_reads is True
+        assert obs.redact_secrets is True
+        assert obs.canary_scheme is True
+
+    def test_default_observation_floor_matches_prd(self):
+        # PRD P0-2 floor: ≥3 distinct kinds OR ≥10 events for ≥2s runs.
+        c = Config.default()
+        obs = c.sandbox.observation
+        assert obs.min_distinct_kinds == 3
+        assert obs.min_total_events == 10
+        assert obs.applies_if_duration_ms_gte == 2000
+
+    def test_default_cache_ttl_aligns_with_prefilter(self):
+        c = Config.default()
+        assert c.sandbox.cache.enabled is True
+        assert c.sandbox.cache.ttl_hours == 168
+
+    def test_default_cache_key_components(self):
+        c = Config.default()
+        keys = c.sandbox.cache.key_components
+        for needed in ("pkg@version", "image_digest", "probe_hash", "policy_hash", "sandbox_mode"):
+            assert needed in keys
+
+    def test_parse_sandbox_enabled(self, tmp_path: Path):
+        f = tmp_path / ".aigate.yml"
+        f.write_text("sandbox:\n  enabled: true\n  mode: strict\n")
+        c = _parse_config(f)
+        assert c.sandbox.enabled is True
+        assert c.sandbox.mode == "strict"
+
+    def test_parse_sandbox_invalid_mode_falls_back_to_default(self, tmp_path: Path):
+        f = tmp_path / ".aigate.yml"
+        f.write_text("sandbox:\n  mode: super_paranoid\n")
+        c = _parse_config(f)
+        # Invalid → warn + default; NEVER silently promote to a less-safe surface.
+        assert c.sandbox.mode == "auto"
+
+    def test_parse_sandbox_deprecated_paranoid_alias_preserved_raw(self, tmp_path: Path):
+        # Raw ``paranoid`` is still valid for backward-compat; canonicalization
+        # happens via normalized_mode(). This test pins the alias acceptance
+        # at the config surface per PRD P2-11.
+        f = tmp_path / ".aigate.yml"
+        f.write_text("sandbox:\n  mode: paranoid\n")
+        c = _parse_config(f)
+        assert c.sandbox.mode == "paranoid"
+        assert c.sandbox.normalized_mode() == "strict"
+
+    def test_parse_sandbox_per_command_gates(self, tmp_path: Path):
+        f = tmp_path / ".aigate.yml"
+        f.write_text(
+            "sandbox:\n"
+            "  enabled: true\n"
+            "  check:\n"
+            "    eager: false\n"
+            "    min_prefilter_severity: high\n"
+            "  scan:\n"
+            "    eager: true\n"
+            "    cost_budget_s: 1200\n"
+            "    budget_exhausted_action: warn_and_continue\n"
+        )
+        c = _parse_config(f)
+        assert c.sandbox.check.eager is False
+        assert c.sandbox.check.min_prefilter_severity == "high"
+        assert c.sandbox.scan.eager is True
+        assert c.sandbox.scan.cost_budget_s == 1200
+        assert c.sandbox.scan.budget_exhausted_action == "warn_and_continue"
+
+    def test_parse_sandbox_observation_overrides(self, tmp_path: Path):
+        f = tmp_path / ".aigate.yml"
+        f.write_text(
+            "sandbox:\n"
+            "  observation:\n"
+            "    capture_tls: false\n"
+            "    redact_secrets: true\n"
+            "    minimum_floor:\n"
+            "      min_distinct_kinds: 5\n"
+            "      min_total_events: 20\n"
+            "      applies_if_duration_ms_gte: 5000\n"
+        )
+        c = _parse_config(f)
+        assert c.sandbox.observation.capture_tls is False
+        assert c.sandbox.observation.redact_secrets is True
+        assert c.sandbox.observation.min_distinct_kinds == 5
+        assert c.sandbox.observation.min_total_events == 20
+        assert c.sandbox.observation.applies_if_duration_ms_gte == 5000
+
+    def test_parse_sandbox_empty_block_matches_default(self, tmp_path: Path):
+        f = tmp_path / ".aigate.yml"
+        f.write_text("sandbox: {}\n")
+        c = _parse_config(f)
+        defaults = Config.default().sandbox
+        assert c.sandbox.enabled == defaults.enabled
+        assert c.sandbox.mode == defaults.mode
+        assert c.sandbox.check.eager == defaults.check.eager
+        assert c.sandbox.scan.eager == defaults.scan.eager
+
+    def test_parse_sandbox_invalid_network_policy_warns_and_defaults(self, tmp_path: Path):
+        f = tmp_path / ".aigate.yml"
+        f.write_text("sandbox:\n  network_policy: wide_open\n")
+        c = _parse_config(f)
+        assert c.sandbox.network_policy == "deny-outbound"
+
+    def test_parse_sandbox_invalid_budget_action_warns_and_defaults(self, tmp_path: Path):
+        f = tmp_path / ".aigate.yml"
+        f.write_text("sandbox:\n  scan:\n    budget_exhausted_action: ignore_and_ship\n")
+        c = _parse_config(f)
+        # Must fall back to the safe default (suspend_scan), not the bogus value.
+        assert c.sandbox.scan.budget_exhausted_action == "suspend_scan"
+
+    def test_parse_sandbox_cache_overrides(self, tmp_path: Path):
+        f = tmp_path / ".aigate.yml"
+        f.write_text(
+            "sandbox:\n"
+            "  cache:\n"
+            "    enabled: false\n"
+            "    ttl_hours: 24\n"
+            "    location: /tmp/sbxcache/\n"
+        )
+        c = _parse_config(f)
+        assert c.sandbox.cache.enabled is False
+        assert c.sandbox.cache.ttl_hours == 24
+        assert c.sandbox.cache.location == "/tmp/sbxcache/"

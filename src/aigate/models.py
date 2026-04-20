@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    # Avoid a runtime circular import: ``aigate.sandbox.types`` imports
+    # ``RiskLevel`` from this module. PEP 563 ``from __future__ import
+    # annotations`` makes the string form safe at runtime.
+    from .sandbox.types import DynamicTrace
 
 
 class Verdict(StrEnum):
@@ -318,3 +324,7 @@ class AnalysisReport:
     cached: bool = False
     total_latency_ms: int = 0
     opensrc_emit: OpensrcEmitResult | None = None
+    # PRD v3.1 §3.2 / §3.5 — structured sandbox output. Never flattened
+    # into ``prefilter.risk_signals[]``; ``policy.decision_from_dynamic_trace``
+    # reads this field directly. None = sandbox was not run for this report.
+    dynamic_trace: DynamicTrace | None = None
