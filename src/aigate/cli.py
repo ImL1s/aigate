@@ -48,11 +48,6 @@ from .resolver import (
     read_local_source_files,
     resolve_package,
 )
-from .sandbox import (
-    SandboxBackend,
-    SandboxMode,
-    SandboxUnavailable,
-)
 
 # Supported ecosystems shared by check/scan/diff. Phase 4 adds ``jsr``.
 # Kept as a tuple so click.Choice accepts it directly and tests can import
@@ -1351,8 +1346,15 @@ def instructions(tools: tuple[str, ...]):
     default=False,
     help="Run the deep sandbox preflight check (PRD §3.3 P1-9).",
 )
+@click.option(
+    "--sandbox-required",
+    "sandbox_required",
+    is_flag=True,
+    default=False,
+    help="Exit code 3 if no sandbox backend is available.",
+)
 @click.pass_context
-def doctor(ctx, sandbox_preflight: bool):
+def doctor(ctx, sandbox_preflight: bool, sandbox_required: bool):
     """Diagnose aigate setup: backends, hooks, config."""
     from .detect import KNOWN_BACKENDS, detect_backends, detect_hooks
 
@@ -1456,27 +1458,34 @@ def doctor(ctx, sandbox_preflight: bool):
     except Exception as exc:  # pragma: no cover — defensive
         console.print(f"  [yellow]sandbox config unavailable: {exc}[/yellow]")
 
-    if sandbox_preflight:
-        console.print("\n[bold]Sandbox preflight:[/bold]")
-        console.print(
-            "  [yellow]WARN:[/yellow] aigate doctor --sandbox is a Phase 1a scaffold — "
-            "dynamic sandbox runtimes (Birdcage / Docker / Tracee) are not yet "
-            "bundled. Reporting the types-only skeleton that IS available."
-        )
-        # Prove the sandbox module imports cleanly; otherwise worker #1's
-        # scaffold is broken and the CLI flag can't ever progress past this.
-        console.print(
-            f"  sandbox module: "
-            f"backend ABC=[green]{SandboxBackend.__name__}[/green], "
-            f"modes=[cyan]{','.join(m.value for m in SandboxMode)}[/cyan]"
-        )
-        console.print(
-            "  [dim]runtime detection will land in Phase 1b "
-            "(detect_available + runtime_select).[/dim]"
-        )
-        # Sanity-check: the SandboxUnavailable symbol is importable so
-        # downstream error-handling code can depend on it today.
-        assert SandboxUnavailable is not None
+    if sandbox_preflight or sandbox_required:
+        import platform as _platform
+
+        from .sandbox.runtime_select import detect_available, detect_linux_connect_observer
+
+        console.print("\n[bold]Sandbox backends:[/bold]")
+        available = detect_available()
+        if available:
+            for backend_cls in available:
+                console.print(f"  [green]\u2713[/green] {backend_cls.name}")
+        else:
+            console.print("  [dim]\u2717 no backends available[/dim]")
+
+        plat = _platform.system()
+        if plat == "Linux":
+            obs = detect_linux_connect_observer()
+            if obs:
+                console.print(f"  connect-observer: {obs}")
+            else:
+                console.print(
+                    "  connect-observer: NONE  "
+                    "[yellow](DEGRADED \u2014 install strace or bpftrace)[/yellow]"
+                )
+        else:
+            console.print("  connect-observer: kernel (sandbox-exec)")
+
+        if sandbox_required and not available:
+            sys.exit(3)
 
     console.print()
 
