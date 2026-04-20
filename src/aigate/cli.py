@@ -14,7 +14,7 @@ from rich.console import Console
 
 from . import __version__
 from .cache import get_cached, set_cached
-from .config import Config
+from .config import Config, SandboxConfig
 from .consensus import run_consensus
 from .models import (
     AnalysisLevel,
@@ -48,6 +48,11 @@ from .resolver import (
     read_local_source_files,
     resolve_package,
 )
+from .sandbox import (
+    SandboxBackend,
+    SandboxMode,
+    SandboxUnavailable,
+)
 
 # Supported ecosystems shared by check/scan/diff. Phase 4 adds ``jsr``.
 # Kept as a tuple so click.Choice accepts it directly and tests can import
@@ -61,7 +66,124 @@ SUPPORTED_ECOSYSTEMS: tuple[str, ...] = (
     "jsr",
 )
 
+# PRD v3.1 §3.3 — sandbox CLI surface.
+# ``paranoid`` is retained as a deprecated alias for ``strict`` (P2-11) and
+# emits a DeprecationWarning when selected. All other mode values map
+# directly to :class:`aigate.sandbox.SandboxMode` except ``auto``, which
+# defers selection to runtime detection (Phase 2+).
+SANDBOX_MODE_CHOICES: tuple[str, ...] = ("light", "strict", "paranoid", "auto")
+SANDBOX_RUNTIME_CHOICES: tuple[str, ...] = (
+    "birdcage",
+    "docker",
+    "docker-only",
+    "docker+runsc",
+    "auto",
+)
+
 console = Console()
+
+
+# ---------------------------------------------------------------------------
+# Phase 1a sandbox scaffold helpers
+#
+# Per PRD Phase 1 plan, these helpers emit a single WARN and fall back to
+# static-only analysis — the actual BirdcageBackend / DockerBackend land in
+# later phases. Tests assert the WARN path + exit-code preservation.
+# ---------------------------------------------------------------------------
+
+
+def _normalize_sandbox_mode(raw: str | None) -> str | None:
+    """Normalize the CLI ``--sandbox-mode`` value.
+
+    ``paranoid`` is a deprecated alias (P2-11); we emit a DeprecationWarning
+    and fold it into ``strict`` before any downstream consumer sees it.
+    Returns ``None`` unchanged so callers can tell "user did not pass the
+    flag" apart from "user explicitly chose default".
+    """
+    if raw is None:
+        return None
+    lowered = raw.strip().lower()
+    if lowered == "paranoid":
+        import warnings
+
+        warnings.warn(
+            "--sandbox-mode=paranoid is a deprecated alias for 'strict'; "
+            "please use --sandbox-mode=strict.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return "strict"
+    return lowered
+
+
+def _warn_sandbox_scaffold(
+    *,
+    command: str,
+    mode: str | None,
+    runtime: str | None,
+    reason: str = "Phase 1a scaffold — dynamic sandbox not yet implemented",
+) -> None:
+    """Emit the Phase 1a scaffold WARN line and continue static-only.
+
+    Centralized so the wording stays consistent across
+    ``check`` / ``scan`` / ``diff`` and tests have a single regex to match.
+    """
+    bits = [f"[yellow]WARN:[/yellow] aigate {command} --sandbox received"]
+    if mode:
+        bits.append(f"(mode={mode})")
+    if runtime:
+        bits.append(f"(runtime={runtime})")
+    bits.append(f"— {reason}; continuing with static analysis only.")
+    console.print(" ".join(bits))
+
+
+def _effective_sandbox_config(
+    cfg: Config,
+    *,
+    command: str,
+    eager_override: bool | None,
+    mode_override: str | None,
+    runtime_override: str | None,
+    timeout_override: int | None,
+    no_cache: bool,
+) -> SandboxConfig:
+    """Return a SandboxConfig reflecting CLI flag overrides.
+
+    Phase 1a does NOT execute a sandbox — this function exists so the
+    CLI surface is already wired for Phase 1b+ and so tests can assert
+    the config the runtime *would* have received. ``command`` picks the
+    per-command gate (``check`` = eager default, ``scan`` = prefilter-gated).
+    """
+    sb = cfg.sandbox
+    gate = sb.check if command == "check" else sb.scan
+    if eager_override is not None:
+        # dataclasses.replace keeps the gate immutable-ish; simpler to
+        # mutate a shallow copy since SandboxCommandGate is not frozen.
+        from dataclasses import replace as _replace
+
+        gate = _replace(gate, eager=eager_override)
+    new_sb = SandboxConfig(
+        enabled=True,  # user passed --sandbox → effective enabled
+        mode=mode_override or sb.mode,
+        runtime=runtime_override or sb.runtime,
+        required=sb.required,
+        timeout_s=timeout_override if timeout_override is not None else sb.timeout_s,
+        image_digest=sb.image_digest,
+        network_policy=sb.network_policy,
+        install_source=sb.install_source,
+        observation=sb.observation,
+        cache=(sb.cache if not no_cache else _replace_dataclass(sb.cache, enabled=False)),
+        check=gate if command == "check" else sb.check,
+        scan=gate if command == "scan" else sb.scan,
+    )
+    return new_sb
+
+
+def _replace_dataclass(obj, **kwargs):
+    """Small wrapper around dataclasses.replace for type-check friendliness."""
+    from dataclasses import replace as _replace
+
+    return _replace(obj, **kwargs)
 
 
 @click.group()
@@ -131,6 +253,51 @@ def _apply_global_flags(ctx, verbose, quiet):
     show_default=True,
     help="Collision policy when --emit-opensrc hits an existing directory.",
 )
+@click.option(
+    "--sandbox",
+    is_flag=True,
+    default=False,
+    help=(
+        "Run the package inside a dynamic sandbox (PRD §3.3). "
+        "Phase 1a scaffold: warns and falls back to static analysis."
+    ),
+)
+@click.option(
+    "--sandbox-mode",
+    type=click.Choice(SANDBOX_MODE_CHOICES),
+    default=None,
+    help="Sandbox tier: light | strict | auto. 'paranoid' is a deprecated alias for 'strict'.",
+)
+@click.option(
+    "--sandbox-runtime",
+    type=click.Choice(SANDBOX_RUNTIME_CHOICES),
+    default=None,
+    help="Sandbox runtime backend (auto-detected when omitted).",
+)
+@click.option(
+    "--sandbox-timeout",
+    type=click.IntRange(10, 300),
+    default=None,
+    help="Per-package sandbox wall-clock budget in seconds (10..300).",
+)
+@click.option(
+    "--sandbox-eager/--no-sandbox-eager",
+    "sandbox_eager",
+    default=None,
+    help="Override sandbox.check.eager (default: True for check).",
+)
+@click.option(
+    "--no-sandbox-cache",
+    is_flag=True,
+    default=False,
+    help="Ignore the deterministic sandbox output cache (PRD §3.8).",
+)
+@click.option(
+    "--debug-trace",
+    is_flag=True,
+    default=False,
+    help="Emit raw sandbox trace alongside the verdict (developer diagnostics).",
+)
 @click.option("--verbose", "-V", is_flag=True, help="Enable debug logging.", hidden=True)
 @click.option("--quiet", "-q", is_flag=True, help="Suppress non-error output.", hidden=True)
 @click.pass_context
@@ -146,6 +313,13 @@ def check(
     local_path: str | None,
     emit_opensrc: bool | None,
     opensrc_overwrite: str,
+    sandbox: bool,
+    sandbox_mode: str | None,
+    sandbox_runtime: str | None,
+    sandbox_timeout: int | None,
+    sandbox_eager: bool | None,
+    no_sandbox_cache: bool,
+    debug_trace: bool,
     verbose: bool,
     quiet: bool,
 ):
@@ -154,6 +328,32 @@ def check(
     Example: aigate check litellm -v 1.82.8
     """
     _apply_global_flags(ctx, verbose, quiet)
+
+    # PRD §3.3 Phase 1a scaffold: warn and continue static-only when
+    # --sandbox (or any --sandbox-* sub-flag) is passed. Sandbox backends
+    # ship in Phase 1b+.
+    sandbox_requested = (
+        sandbox
+        or any(
+            v is not None and v is not False
+            for v in (
+                sandbox_mode,
+                sandbox_runtime,
+                sandbox_timeout,
+                sandbox_eager,
+            )
+        )
+        or no_sandbox_cache
+        or debug_trace
+    )
+    normalized_mode = _normalize_sandbox_mode(sandbox_mode)
+    if sandbox_requested:
+        _warn_sandbox_scaffold(
+            command="check",
+            mode=normalized_mode,
+            runtime=sandbox_runtime,
+        )
+
     asyncio.run(
         _check(
             package,
@@ -584,6 +784,51 @@ def scan_dir_cmd(ctx, directory: str, staged: bool, use_json: bool, verbose: boo
 @click.option("--json", "use_json", is_flag=True, help="Output as JSON")
 @click.option("--sarif", "use_sarif", is_flag=True, help="Output as SARIF 2.1.0")
 @click.option("--skip-ai", is_flag=True, help="Only run static pre-filter")
+@click.option(
+    "--sandbox",
+    is_flag=True,
+    default=False,
+    help=(
+        "Run each package inside a dynamic sandbox (PRD §3.3). "
+        "Phase 1a scaffold: warns and falls back to static analysis."
+    ),
+)
+@click.option(
+    "--sandbox-mode",
+    type=click.Choice(SANDBOX_MODE_CHOICES),
+    default=None,
+    help="Sandbox tier: light | strict | auto. 'paranoid' is a deprecated alias for 'strict'.",
+)
+@click.option(
+    "--sandbox-runtime",
+    type=click.Choice(SANDBOX_RUNTIME_CHOICES),
+    default=None,
+    help="Sandbox runtime backend (auto-detected when omitted).",
+)
+@click.option(
+    "--sandbox-timeout",
+    type=click.IntRange(10, 300),
+    default=None,
+    help="Per-package sandbox wall-clock budget in seconds (10..300).",
+)
+@click.option(
+    "--sandbox-eager/--no-sandbox-eager",
+    "sandbox_eager",
+    default=None,
+    help="Override sandbox.scan.eager (default: False — prefilter-gated).",
+)
+@click.option(
+    "--no-sandbox-cache",
+    is_flag=True,
+    default=False,
+    help="Ignore the deterministic sandbox output cache (PRD §3.8).",
+)
+@click.option(
+    "--debug-trace",
+    is_flag=True,
+    default=False,
+    help="Emit raw sandbox trace alongside the verdict (developer diagnostics).",
+)
 @click.option("--verbose", "-V", is_flag=True, help="Enable debug logging.", hidden=True)
 @click.option("--quiet", "-q", is_flag=True, help="Suppress non-error output.", hidden=True)
 @click.pass_context
@@ -594,6 +839,13 @@ def scan(
     use_json: bool,
     use_sarif: bool,
     skip_ai: bool,
+    sandbox: bool,
+    sandbox_mode: str | None,
+    sandbox_runtime: str | None,
+    sandbox_timeout: int | None,
+    sandbox_eager: bool | None,
+    no_sandbox_cache: bool,
+    debug_trace: bool,
     verbose: bool,
     quiet: bool,
 ):
@@ -602,6 +854,29 @@ def scan(
     Example: aigate scan requirements.txt
     """
     _apply_global_flags(ctx, verbose, quiet)
+
+    sandbox_requested = (
+        sandbox
+        or any(
+            v is not None and v is not False
+            for v in (
+                sandbox_mode,
+                sandbox_runtime,
+                sandbox_timeout,
+                sandbox_eager,
+            )
+        )
+        or no_sandbox_cache
+        or debug_trace
+    )
+    normalized_mode = _normalize_sandbox_mode(sandbox_mode)
+    if sandbox_requested:
+        _warn_sandbox_scaffold(
+            command="scan",
+            mode=normalized_mode,
+            runtime=sandbox_runtime,
+        )
+
     asyncio.run(_scan(lockfile, use_json, use_sarif, skip_ai, ecosystem))
 
 
@@ -701,6 +976,51 @@ async def _scan(
 @click.option("--json", "use_json", is_flag=True, help="Output as JSON")
 @click.option("--sarif", "use_sarif", is_flag=True, help="Output as SARIF 2.1.0")
 @click.option("--skip-ai", is_flag=True, help="Only run static pre-filter")
+@click.option(
+    "--sandbox",
+    is_flag=True,
+    default=False,
+    help=(
+        "Run the changed files through a dynamic sandbox (PRD §3.3). "
+        "Phase 1a scaffold: warns and falls back to static analysis."
+    ),
+)
+@click.option(
+    "--sandbox-mode",
+    type=click.Choice(SANDBOX_MODE_CHOICES),
+    default=None,
+    help="Sandbox tier: light | strict | auto. 'paranoid' is a deprecated alias for 'strict'.",
+)
+@click.option(
+    "--sandbox-runtime",
+    type=click.Choice(SANDBOX_RUNTIME_CHOICES),
+    default=None,
+    help="Sandbox runtime backend (auto-detected when omitted).",
+)
+@click.option(
+    "--sandbox-timeout",
+    type=click.IntRange(10, 300),
+    default=None,
+    help="Per-package sandbox wall-clock budget in seconds (10..300).",
+)
+@click.option(
+    "--sandbox-eager/--no-sandbox-eager",
+    "sandbox_eager",
+    default=None,
+    help="Override sandbox.scan.eager; diff reuses the scan gate (PRD §3.3).",
+)
+@click.option(
+    "--no-sandbox-cache",
+    is_flag=True,
+    default=False,
+    help="Ignore the deterministic sandbox output cache (PRD §3.8).",
+)
+@click.option(
+    "--debug-trace",
+    is_flag=True,
+    default=False,
+    help="Emit raw sandbox trace alongside the verdict (developer diagnostics).",
+)
 @click.option("--verbose", "-V", is_flag=True, help="Enable debug logging.", hidden=True)
 @click.option("--quiet", "-q", is_flag=True, help="Suppress non-error output.", hidden=True)
 @click.pass_context
@@ -713,6 +1033,13 @@ def diff(
     use_json: bool,
     use_sarif: bool,
     skip_ai: bool,
+    sandbox: bool,
+    sandbox_mode: str | None,
+    sandbox_runtime: str | None,
+    sandbox_timeout: int | None,
+    sandbox_eager: bool | None,
+    no_sandbox_cache: bool,
+    debug_trace: bool,
     verbose: bool,
     quiet: bool,
 ):
@@ -721,6 +1048,29 @@ def diff(
     Example: aigate diff litellm 1.82.6 1.82.8
     """
     _apply_global_flags(ctx, verbose, quiet)
+
+    sandbox_requested = (
+        sandbox
+        or any(
+            v is not None and v is not False
+            for v in (
+                sandbox_mode,
+                sandbox_runtime,
+                sandbox_timeout,
+                sandbox_eager,
+            )
+        )
+        or no_sandbox_cache
+        or debug_trace
+    )
+    normalized_mode = _normalize_sandbox_mode(sandbox_mode)
+    if sandbox_requested:
+        _warn_sandbox_scaffold(
+            command="diff",
+            mode=normalized_mode,
+            runtime=sandbox_runtime,
+        )
+
     asyncio.run(_diff(package, old_version, new_version, ecosystem, use_json, use_sarif, skip_ai))
 
 
@@ -994,8 +1344,15 @@ def instructions(tools: tuple[str, ...]):
 
 
 @main.command()
+@click.option(
+    "--sandbox",
+    "sandbox_preflight",
+    is_flag=True,
+    default=False,
+    help="Run the deep sandbox preflight check (PRD §3.3 P1-9).",
+)
 @click.pass_context
-def doctor(ctx):
+def doctor(ctx, sandbox_preflight: bool):
     """Diagnose aigate setup: backends, hooks, config."""
     from .detect import KNOWN_BACKENDS, detect_backends, detect_hooks
 
@@ -1080,7 +1437,101 @@ def doctor(ctx):
         except Exception:
             pass
 
+    # 7. Sandbox availability (PRD §3.3 — surface shallow by default, deep
+    # when --sandbox is passed). Phase 1a scaffold: no real backend wired
+    # yet, so we report scaffold + config state and emit a WARN.
+    console.print("\n[bold]Sandbox:[/bold]")
+    try:
+        sb_cfg: SandboxConfig = config.sandbox  # type: ignore[assignment]
+        console.print(
+            f"  enabled: {'yes' if sb_cfg.enabled else 'no'}  "
+            f"mode: {sb_cfg.normalized_mode()}  "
+            f"runtime: {sb_cfg.runtime}"
+        )
+        console.print(
+            f"  timeout_s: {sb_cfg.timeout_s}  "
+            f"network_policy: {sb_cfg.network_policy}  "
+            f"install_source: {sb_cfg.install_source}"
+        )
+    except Exception as exc:  # pragma: no cover — defensive
+        console.print(f"  [yellow]sandbox config unavailable: {exc}[/yellow]")
+
+    if sandbox_preflight:
+        console.print("\n[bold]Sandbox preflight:[/bold]")
+        console.print(
+            "  [yellow]WARN:[/yellow] aigate doctor --sandbox is a Phase 1a scaffold — "
+            "dynamic sandbox runtimes (Birdcage / Docker / Tracee) are not yet "
+            "bundled. Reporting the types-only skeleton that IS available."
+        )
+        # Prove the sandbox module imports cleanly; otherwise worker #1's
+        # scaffold is broken and the CLI flag can't ever progress past this.
+        console.print(
+            f"  sandbox module: "
+            f"backend ABC=[green]{SandboxBackend.__name__}[/green], "
+            f"modes=[cyan]{','.join(m.value for m in SandboxMode)}[/cyan]"
+        )
+        console.print(
+            "  [dim]runtime detection will land in Phase 1b "
+            "(detect_available + runtime_select).[/dim]"
+        )
+        # Sanity-check: the SandboxUnavailable symbol is importable so
+        # downstream error-handling code can depend on it today.
+        assert SandboxUnavailable is not None
+
     console.print()
+
+
+# ---------------------------------------------------------------------------
+# aigate sandbox — dynamic-sandbox management subcommands (PRD §3.3)
+# ---------------------------------------------------------------------------
+
+
+@main.group()
+def sandbox():
+    """Manage aigate's optional dynamic sandbox (PRD v3.1 §3.3).
+
+    Subcommands:
+
+    \b
+    - aigate sandbox init    scaffold .aigate.yml sandbox block + smoke test
+    """
+
+
+@sandbox.command("init")
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Overwrite an existing sandbox block in .aigate.yml.",
+)
+def sandbox_init(force: bool):
+    """Scaffold the sandbox section of ``.aigate.yml`` (PRD §3.3 P1-9).
+
+    Phase 1a scaffold: prints the default sandbox block and a WARN. The
+    real scaffolder (writes to disk, runs smoke test) ships in Phase 1b.
+    """
+    console.print(
+        "[yellow]WARN:[/yellow] aigate sandbox init is a Phase 1a scaffold — "
+        "it does not yet modify .aigate.yml or run the smoke test. See PRD §3.3 P1-9."
+    )
+    # Echo the default SandboxConfig so users can copy-paste into .aigate.yml.
+    default = SandboxConfig()
+    console.print(
+        "\nDefault sandbox block (copy into .aigate.yml, then flip "
+        "[cyan]sandbox.enabled: true[/cyan] when Phase 1b ships):\n"
+    )
+    console.print("sandbox:")
+    console.print(f"  enabled: {str(default.enabled).lower()}")
+    console.print(f"  mode: {default.mode}")
+    console.print(f"  runtime: {default.runtime}")
+    console.print(f"  required: {str(default.required).lower()}")
+    console.print(f"  timeout_s: {default.timeout_s}")
+    console.print(f"  network_policy: {default.network_policy}")
+    console.print(f"  install_source: {default.install_source}")
+    if force:
+        console.print(
+            "\n[dim]--force noted; will be honoured when the Phase 1b scaffolder lands.[/dim]"
+        )
 
 
 # ---------------------------------------------------------------------------
