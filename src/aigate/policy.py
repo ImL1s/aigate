@@ -93,11 +93,24 @@ def decision_from_error(message: str) -> PolicyDecision:
 
 
 def decision_from_report(report: AnalysisReport) -> PolicyDecision:
-    decisions = (
-        [decision_from_consensus(report.consensus)]
-        if report.consensus
-        else [decision_from_prefilter(report.prefilter)]
-    )
+    # Data-layer guarantee: uninspected bytes can never resolve to SAFE.
+    # Lives here (not just in CLI) so cached reports rehydrated from disk
+    # and any external constructor of AnalysisReport cannot bypass it.
+    if report.prefilter.source_unavailable:
+        decisions = [
+            PolicyDecision(
+                outcome=PolicyOutcome.NEEDS_REVIEW,
+                exit_code=1,
+                reason=report.prefilter.reason
+                or "Source bytes unavailable; manual review required",
+            )
+        ]
+    else:
+        decisions = (
+            [decision_from_consensus(report.consensus)]
+            if report.consensus
+            else [decision_from_prefilter(report.prefilter)]
+        )
     enrichment_decision = decision_from_enrichment(report.enrichment)
     if enrichment_decision:
         decisions.append(enrichment_decision)
