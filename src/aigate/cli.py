@@ -48,6 +48,11 @@ from .resolver import (
     read_local_source_files,
     resolve_package,
 )
+from .sandbox import (  # noqa: F401 — re-exported for test import boundary contract
+    SandboxBackend,
+    SandboxMode,
+    SandboxUnavailable,
+)
 
 # Supported ecosystems shared by check/scan/diff. Phase 4 adds ``jsr``.
 # Kept as a tuple so click.Choice accepts it directly and tests can import
@@ -1463,7 +1468,7 @@ def doctor(ctx, sandbox_preflight: bool, sandbox_required: bool):
 
         from .sandbox.runtime_select import detect_available, detect_linux_connect_observer
 
-        console.print("\n[bold]Sandbox backends:[/bold]")
+        console.print("\n[bold]Sandbox preflight[/bold] (Phase 1a scaffold):")
         available = detect_available()
         if available:
             for backend_cls in available:

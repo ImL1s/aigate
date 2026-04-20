@@ -7,11 +7,18 @@ themselves (``cargo install birdcage``).
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import platform
+import resource
 import shutil
+import tempfile
+import time
 from collections.abc import Iterable
 
+from .canary import generate_canary_scheme
+from .errors import SandboxUnavailable
 from .runtime_select import detect_linux_connect_observer
 from .secrets import redact_secrets
 from .types import (
@@ -22,6 +29,9 @@ from .types import (
     SandboxCoverage,
     SandboxRunRequest,
 )
+
+BIRDCAGE_MIN_VERSION: tuple[int, int, int] = (0, 5, 0)
+BIRDCAGE_TESTED_MAX_VERSION: tuple[int, int, int] = (0, 8, 1)
 
 # REV-2: split profiles per platform.
 # Linux Landlock is FS-only — no network primitive. Document the gap explicitly.
@@ -39,7 +49,7 @@ NPM_LIGHT_PROFILE_MACOS: str = """\
 (deny default)
 (deny network*)
 (allow file-read*)
-(allow file-write* (subpath (param "scratch_home")) (subpath "/tmp"))
+(allow file-write* (subpath "${SCRATCH_HOME}") (subpath "/tmp"))
 (allow process-fork)
 (allow process-exec)
 """
@@ -142,10 +152,130 @@ class BirdcageBackend(SandboxBackend):
         return True  # macOS kernel-enforces via sandbox-exec
 
     async def run(self, request: SandboxRunRequest) -> DynamicTrace:
-        """Skeleton — full impl lands in Task #6 (worker-5)."""
-        return DynamicTrace(
-            ran=False,
-            runtime="birdcage",
-            error="BirdcageBackend.run() not yet implemented (Phase 1b Task 4)",
-            skipped_expected=set(BIRDCAGE_EXPECTED_SKIPS),
+        birdcage = shutil.which("birdcage")
+        if birdcage is None:
+            raise SandboxUnavailable("birdcage binary not on PATH")
+        npm = shutil.which("npm")
+        if npm is None:
+            raise SandboxUnavailable("npm binary not on PATH")
+
+        canary = generate_canary_scheme()
+        scratch_home = tempfile.mkdtemp(prefix="aigate-sandbox-")
+
+        rule_args = self._build_rule_args(scratch_home)
+        argv = [
+            birdcage, *rule_args, "--",
+            npm, "install", request.source_archive_path,
+            "--offline", "--ignore-scripts=false", "--no-audit", "--no-fund", "--no-save",
+        ]
+        env = {
+            "HOME": scratch_home,
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "CI": "1",
+            "NPM_CONFIG_YES": "true",
+            "NPM_CONFIG_OFFLINE": "true",
+            "NPM_CONFIG_LOGLEVEL": "error",
+            "NPM_CONFIG_REGISTRY": "http://127.0.0.1:1",
+        }
+        start_ms = int(time.monotonic() * 1000)
+        proc = await asyncio.create_subprocess_exec(
+            *argv, env=env, stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
+
+        synthetic_events: list[DynamicTraceEvent] = []
+        stop = asyncio.Event()
+        scrub: list[str] = [canary.run_token] if canary.run_token else []
+
+        async def resource_probe() -> None:
+            first = True
+            while not stop.is_set():
+                if first:
+                    synthetic_events.append(DynamicTraceEvent(
+                        kind="exec",
+                        source="resource_probe",
+                        pid=proc.pid or 0,
+                        process="npm",
+                        ts_ms=int(time.monotonic() * 1000) - start_ms,
+                        target=npm,
+                    ))
+                    first = False
+                ru = resource.getrusage(resource.RUSAGE_CHILDREN)
+                synthetic_events.append(DynamicTraceEvent(
+                    kind="exec",
+                    source="resource_probe",
+                    pid=proc.pid or 0,
+                    process="npm",
+                    ts_ms=int(time.monotonic() * 1000) - start_ms,
+                    target=f"rss_kb={ru.ru_maxrss}",
+                ))
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=0.2)
+                except TimeoutError:
+                    continue
+
+        probe_task = asyncio.create_task(resource_probe())
+
+        timed_out = False
+        try:
+            stdout_b, stderr_b = await asyncio.wait_for(
+                proc.communicate(), timeout=request.timeout_s
+            )
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+            stdout_b, stderr_b = b"", b""
+            timed_out = True
+        finally:
+            stop.set()
+            await probe_task
+
+        duration_ms = int(time.monotonic() * 1000) - start_ms
+
+        raw_lines = stdout_b.decode("utf-8", errors="replace").splitlines()
+        parsed_events, events_parsed, raw_lines_seen = parse_birdcage_stream(raw_lines, scrub)
+        err_msg, drift_cov = classify_parse_quality(events_parsed, raw_lines_seen)
+
+        all_events = synthetic_events + parsed_events
+        skipped_unexpected: set[SandboxCoverage] = set()
+        if drift_cov is not None:
+            skipped_unexpected.add(drift_cov)
+
+        error: str | None = None
+        if timed_out:
+            error = f"birdcage wall-clock timeout after {request.timeout_s}s"
+        elif proc.returncode and proc.returncode != 0:
+            stderr_text = redact_secrets(stderr_b.decode(errors="replace"), scrub)
+            error = f"birdcage exited rc={proc.returncode}; stderr={stderr_text[:200]}"
+        elif err_msg:
+            error = err_msg
+
+        return DynamicTrace(
+            ran=True,
+            runtime="birdcage",
+            duration_ms=duration_ms,
+            timeout=timed_out,
+            events=all_events,
+            observed={SandboxCoverage.FS_WRITES},
+            skipped_expected=set(BIRDCAGE_EXPECTED_SKIPS),
+            skipped_unexpected=skipped_unexpected,
+            canary=canary,
+            error=error,
+        )
+
+    def _build_rule_args(self, scratch_home: str) -> list[str]:
+        """Compose birdcage argv flags per platform from profile constants."""
+        if platform.system() == "Linux":
+            args: list[str] = []
+            for path in NPM_LIGHT_PROFILE_LINUX["fs_read_only"]:
+                args.extend(["--allow-read", path])
+            for path in NPM_LIGHT_PROFILE_LINUX["fs_read_write"]:
+                actual = path.replace("${SCRATCH_HOME}", scratch_home)
+                args.extend(["--allow-read", actual, "--allow-write", actual])
+            return args
+        # macOS: write SBPL profile to scratch dir and pass via flag
+        sbpl = NPM_LIGHT_PROFILE_MACOS.replace("${SCRATCH_HOME}", scratch_home)
+        prof_path = os.path.join(scratch_home, "npm-light.sb")
+        with open(prof_path, "w") as f:
+            f.write(sbpl)
+        return ["--sbpl-profile", prof_path]
