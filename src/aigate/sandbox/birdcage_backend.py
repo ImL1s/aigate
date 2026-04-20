@@ -8,11 +8,13 @@ themselves (``cargo install birdcage``).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import platform
 import resource
 import shutil
+import signal
 import tempfile
 import time
 from collections.abc import Iterable
@@ -105,10 +107,20 @@ def _try_parse_line(line: str) -> DynamicTraceEvent | None:
     kind = obj.get("kind")
     if not kind:
         return None
+    # Guard int() against schema drift (e.g., Birdcage emits "ts_ms": "???" or
+    # "pid": null during a version upgrade) — ValueError/TypeError here would
+    # propagate uncaught through parse_birdcage_stream and silence every
+    # subsequent line, so we treat the whole row as parse failure and let
+    # classify_parse_quality surface PARSER_PARTIAL_DRIFT.
+    try:
+        ts_ms = int(obj.get("ts_ms", 0) or 0)
+        pid = int(obj.get("pid", 0) or 0)
+    except (ValueError, TypeError):
+        return None
     return DynamicTraceEvent(
         kind=kind,
-        ts_ms=int(obj.get("ts_ms", 0)),
-        pid=int(obj.get("pid", 0)),
+        ts_ms=ts_ms,
+        pid=pid,
         process=str(obj.get("process", "")),
         target=str(obj.get("target", "")),
         raw=line,
@@ -161,7 +173,22 @@ class BirdcageBackend(SandboxBackend):
 
         canary = generate_canary_scheme()
         scratch_home = tempfile.mkdtemp(prefix="aigate-sandbox-")
+        try:
+            return await self._run_inside_scratch(request, birdcage, npm, canary, scratch_home)
+        finally:
+            # REV-cleanup: always delete the scratch HOME + any SBPL profile
+            # we wrote inside it. Leaking one directory per run under continuous
+            # scanning silently fills /tmp.
+            shutil.rmtree(scratch_home, ignore_errors=True)
 
+    async def _run_inside_scratch(
+        self,
+        request: SandboxRunRequest,
+        birdcage: str,
+        npm: str,
+        canary,  # type: ignore[no-untyped-def]
+        scratch_home: str,
+    ) -> DynamicTrace:
         rule_args = self._build_rule_args(scratch_home)
         argv = [
             birdcage,
@@ -186,12 +213,17 @@ class BirdcageBackend(SandboxBackend):
             "NPM_CONFIG_REGISTRY": "http://127.0.0.1:1",
         }
         start_ms = int(time.monotonic() * 1000)
+        # start_new_session=True makes birdcage the leader of a fresh process
+        # group, so a timeout SIGKILL via killpg reaches every descendant
+        # (npm + postinstall.js + whatever it spawned). Without this, proc.kill()
+        # only hits the birdcage PID and npm survives the wall-clock cutoff.
         proc = await asyncio.create_subprocess_exec(
             *argv,
             env=env,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
 
         synthetic_events: list[DynamicTraceEvent] = []
@@ -215,7 +247,15 @@ class BirdcageBackend(SandboxBackend):
 
         async def resource_probe() -> None:
             while not stop.is_set():
-                ru = resource.getrusage(resource.RUSAGE_CHILDREN)
+                try:
+                    ru = resource.getrusage(resource.RUSAGE_CHILDREN)
+                except OSError:
+                    # Kernel configs where getrusage is unavailable must not
+                    # poison the probe task — the finally-block would then
+                    # re-raise here and swallow the real exception from
+                    # communicate() / our timeout path.
+                    ru = None
+                target = f"rss_kb={ru.ru_maxrss}" if ru is not None else "rss_kb=unavailable"
                 synthetic_events.append(
                     DynamicTraceEvent(
                         kind="exec",
@@ -223,7 +263,7 @@ class BirdcageBackend(SandboxBackend):
                         pid=proc.pid or 0,
                         process="npm",
                         ts_ms=int(time.monotonic() * 1000) - start_ms,
-                        target=f"rss_kb={ru.ru_maxrss}",
+                        target=target,
                     )
                 )
                 try:
@@ -239,13 +279,25 @@ class BirdcageBackend(SandboxBackend):
                 proc.communicate(), timeout=request.timeout_s
             )
         except TimeoutError:
-            proc.kill()
+            # Kill the entire process group so npm + postinstall children die
+            # alongside birdcage. Fall back to proc.kill() if killpg is not
+            # supported (e.g., pid already reaped, or Windows where getpgid
+            # is missing).
+            with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
             await proc.wait()
             stdout_b, stderr_b = b"", b""
             timed_out = True
         finally:
             stop.set()
-            await probe_task
+            # Never let a probe-task exception mask the real failure that
+            # brought us into `finally`. cancel() + shielded await + suppress
+            # guarantees teardown does not re-raise.
+            probe_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await probe_task
 
         duration_ms = int(time.monotonic() * 1000) - start_ms
 

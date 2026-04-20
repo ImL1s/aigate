@@ -49,7 +49,15 @@ def detect_available() -> list[type]:
 
 
 def select_backend(mode: SandboxMode, required: bool) -> SandboxBackend:
-    """Pick the best available backend, or fail-closed if required."""
+    """Pick the best available backend for the requested mode.
+
+    Fail-closed when ``required=True`` and no backend supports ``mode``.
+    Phase 1b ships only ``BirdcageBackend`` (light mode). Strict and
+    docker+runsc modes land in Phase 4; until then we must refuse to
+    silently downgrade a caller who asked for kernel-enforced strict
+    isolation — that was the old bug where ``SandboxMode.STRICT`` routed
+    to cooperative Linux-light with no warning (reviewer P1).
+    """
     available = detect_available()
     if not available:
         if required:
@@ -63,4 +71,14 @@ def select_backend(mode: SandboxMode, required: bool) -> SandboxBackend:
         raise SandboxUnavailable(
             "No sandbox backend available; sandbox.required=False so caller should fallback."
         )
+
+    # Phase 1b only ships light mode. Anything stricter has no backend yet.
+    if mode in (SandboxMode.STRICT, SandboxMode.DOCKER_RUNSC):
+        raise SandboxUnavailable(
+            f"Sandbox mode {mode.value!r} requires kernel-enforced isolation "
+            "(Phase 4 Docker+runsc) which is not yet implemented. "
+            "Either switch to --sandbox-mode=light (cooperative + observed on Linux, "
+            "sandbox-exec kernel on macOS) or wait for Phase 4."
+        )
+
     return available[0]()
