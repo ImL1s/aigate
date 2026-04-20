@@ -1,4 +1,5 @@
 """Backend selection + observer detection (PRD v3.1 §3.1)."""
+
 from __future__ import annotations
 
 import platform

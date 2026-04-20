@@ -70,13 +70,15 @@ class TestPartialDrift:
 class TestRedactionSanity:
     def test_secret_value_in_target_is_redacted(self) -> None:
         secret = "AKIAFAKEKEY1234567890"
-        line = json.dumps({
-            "kind": "exec",
-            "ts_ms": 0,
-            "pid": 1,
-            "process": "npm",
-            "target": f"npm install lodash AWS_SECRET_ACCESS_KEY={secret}",
-        })
+        line = json.dumps(
+            {
+                "kind": "exec",
+                "ts_ms": 0,
+                "pid": 1,
+                "process": "npm",
+                "target": f"npm install lodash AWS_SECRET_ACCESS_KEY={secret}",
+            }
+        )
         events, _, _ = parse_birdcage_stream([line], scrub_values=[secret])
         assert len(events) == 1
         assert secret not in events[0].target

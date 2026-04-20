@@ -164,9 +164,17 @@ class BirdcageBackend(SandboxBackend):
 
         rule_args = self._build_rule_args(scratch_home)
         argv = [
-            birdcage, *rule_args, "--",
-            npm, "install", request.source_archive_path,
-            "--offline", "--ignore-scripts=false", "--no-audit", "--no-fund", "--no-save",
+            birdcage,
+            *rule_args,
+            "--",
+            npm,
+            "install",
+            request.source_archive_path,
+            "--offline",
+            "--ignore-scripts=false",
+            "--no-audit",
+            "--no-fund",
+            "--no-save",
         ]
         env = {
             "HOME": scratch_home,
@@ -179,36 +187,45 @@ class BirdcageBackend(SandboxBackend):
         }
         start_ms = int(time.monotonic() * 1000)
         proc = await asyncio.create_subprocess_exec(
-            *argv, env=env, stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            *argv,
+            env=env,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
 
         synthetic_events: list[DynamicTraceEvent] = []
         stop = asyncio.Event()
         scrub: list[str] = [canary.run_token] if canary.run_token else []
 
+        # Emit the bootstrap synthetic event synchronously BEFORE any await —
+        # Python 3.12+ asyncio can skip the probe task entirely if communicate()
+        # completes on the first step (mocked tests), so the resource-probe
+        # guarantee has to live outside the background task.
+        synthetic_events.append(
+            DynamicTraceEvent(
+                kind="exec",
+                source="resource_probe",
+                pid=proc.pid or 0,
+                process="npm",
+                ts_ms=int(time.monotonic() * 1000) - start_ms,
+                target=npm,
+            )
+        )
+
         async def resource_probe() -> None:
-            first = True
             while not stop.is_set():
-                if first:
-                    synthetic_events.append(DynamicTraceEvent(
+                ru = resource.getrusage(resource.RUSAGE_CHILDREN)
+                synthetic_events.append(
+                    DynamicTraceEvent(
                         kind="exec",
                         source="resource_probe",
                         pid=proc.pid or 0,
                         process="npm",
                         ts_ms=int(time.monotonic() * 1000) - start_ms,
-                        target=npm,
-                    ))
-                    first = False
-                ru = resource.getrusage(resource.RUSAGE_CHILDREN)
-                synthetic_events.append(DynamicTraceEvent(
-                    kind="exec",
-                    source="resource_probe",
-                    pid=proc.pid or 0,
-                    process="npm",
-                    ts_ms=int(time.monotonic() * 1000) - start_ms,
-                    target=f"rss_kb={ru.ru_maxrss}",
-                ))
+                        target=f"rss_kb={ru.ru_maxrss}",
+                    )
+                )
                 try:
                     await asyncio.wait_for(stop.wait(), timeout=0.2)
                 except TimeoutError:

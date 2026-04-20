@@ -64,9 +64,7 @@ def test_check_available_false_on_linux_without_connect_observer(monkeypatch):
     monkeypatch.setattr(platform, "system", lambda: "Linux")
     with (
         patch("aigate.sandbox.birdcage_backend.shutil.which", return_value="/usr/bin/birdcage"),
-        patch(
-            "aigate.sandbox.birdcage_backend.detect_linux_connect_observer", return_value=None
-        ),
+        patch("aigate.sandbox.birdcage_backend.detect_linux_connect_observer", return_value=None),
     ):
         assert BirdcageBackend().check_available() is False
 
@@ -99,8 +97,7 @@ async def test_no_outbound_connect_to_registry_npmjs_org(tmp_path):
     trace = await backend.run(request)
 
     registry_hits = [
-        e for e in trace.events
-        if e.kind == "connect" and "registry.npmjs.org" in e.target
+        e for e in trace.events if e.kind == "connect" and "registry.npmjs.org" in e.target
     ]
     assert registry_hits == [], (
         f"Unexpected outbound connection to registry detected: {registry_hits}"

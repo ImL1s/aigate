@@ -43,9 +43,7 @@ async def test_net_connect_postinstall_observed_or_observation_failure(tmp_path)
     """Sandbox must detect or flag the net.connect postinstall attempt."""
     backend = BirdcageBackend()
     if not backend.check_available():
-        pytest.skip(
-            "birdcage on PATH but check_available()=False (connect-observer missing)"
-        )
+        pytest.skip("birdcage on PATH but check_available()=False (connect-observer missing)")
 
     tarball = _make_fixture_tarball(tmp_path)
     request = SandboxRunRequest(
@@ -59,10 +57,7 @@ async def test_net_connect_postinstall_observed_or_observation_failure(tmp_path)
 
     trace = await backend.run(request)
 
-    connect_events = [
-        e for e in trace.events
-        if e.kind == "connect" and "192.0.2.1" in e.target
-    ]
+    connect_events = [e for e in trace.events if e.kind == "connect" and "192.0.2.1" in e.target]
     observation_failure = trace.has_observation_failure()
 
     assert connect_events or observation_failure, (

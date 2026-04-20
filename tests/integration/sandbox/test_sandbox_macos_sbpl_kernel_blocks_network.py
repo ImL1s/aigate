@@ -38,8 +38,15 @@ def test_sbpl_profile_denies_outbound_network():
         prof_path = _write_sbpl_profile(scratch)
         result = subprocess.run(
             [
-                "sandbox-exec", "-f", prof_path,
-                "curl", "-s", "--max-time", "3", "--connect-timeout", "3",
+                "sandbox-exec",
+                "-f",
+                prof_path,
+                "curl",
+                "-s",
+                "--max-time",
+                "3",
+                "--connect-timeout",
+                "3",
                 "https://example.com",
             ],
             capture_output=True,

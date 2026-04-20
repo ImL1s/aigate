@@ -44,17 +44,17 @@ def _mock_proc(
     return proc
 
 
-_FIVE_EVENTS_STDOUT = "\n".join([
-    '{"kind":"exec","ts_ms":1,"pid":42,"process":"npm","target":"/usr/bin/node"}',
-    '{"kind":"open","ts_ms":2,"pid":42,"process":"npm","target":"/tmp/pkg/package.json"}',
-    '{"kind":"write","ts_ms":3,"pid":42,"process":"npm","target":"/tmp/pkg/node_modules"}',
-    '{"kind":"connect","ts_ms":4,"pid":42,"process":"node","target":"127.0.0.1:1"}',
-    '{"kind":"dns","ts_ms":5,"pid":42,"process":"node","target":"localhost"}',
-]).encode()
+_FIVE_EVENTS_STDOUT = "\n".join(
+    [
+        '{"kind":"exec","ts_ms":1,"pid":42,"process":"npm","target":"/usr/bin/node"}',
+        '{"kind":"open","ts_ms":2,"pid":42,"process":"npm","target":"/tmp/pkg/package.json"}',
+        '{"kind":"write","ts_ms":3,"pid":42,"process":"npm","target":"/tmp/pkg/node_modules"}',
+        '{"kind":"connect","ts_ms":4,"pid":42,"process":"node","target":"127.0.0.1:1"}',
+        '{"kind":"dns","ts_ms":5,"pid":42,"process":"node","target":"localhost"}',
+    ]
+).encode()
 
-_TEN_NON_JSON_LINES = b"\n".join(
-    [b"npm warn deprecated old-pkg@1.0.0"] * 10
-)
+_TEN_NON_JSON_LINES = b"\n".join([b"npm warn deprecated old-pkg@1.0.0"] * 10)
 
 
 def _patch_which(name: str) -> str:
