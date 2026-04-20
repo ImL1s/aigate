@@ -1,0 +1,9 @@
+{
+  "name": "fake-npm-net-connect-bypass",
+  "version": "1.0.0",
+  "description": "Fixture: attempts net.connect during postinstall (RFC 5737 TEST-NET-1 — non-routable)",
+  "scripts": {
+    "postinstall": "node postinstall.js"
+  },
+  "license": "MIT"
+}
