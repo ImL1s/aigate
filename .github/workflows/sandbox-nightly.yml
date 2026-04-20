@@ -1,0 +1,24 @@
+name: Sandbox Nightly
+
+on:
+  schedule:
+    - cron: '0 7 * * 1'  # Mondays 07:00 UTC weekly
+  workflow_dispatch:
+
+jobs:
+  sandbox-tests:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - name: Install strace (Linux observer)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y strace zsh
+      - name: Install Birdcage
+        run: cargo install birdcage --version "${BIRDCAGE_TESTED_MAX_VERSION:-0.9.0}"
+      - run: pip install -e ".[dev]"
+      - run: pytest tests/unit/sandbox tests/integration/sandbox tests/e2e -v

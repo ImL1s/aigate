@@ -8,8 +8,9 @@ This document tracks the public contract for Phase 1. Implementation details,
 backend wiring, and strict-mode Docker escalation are covered in the PRD
 (`.omc/plans/aigate-sandbox-mode-prd.md` §3).
 
-> Status: **Phase 1 scaffold — scope lock only.** The `--sandbox` flag is
-> wired up but backends emit empty traces until Phase 2 lands.
+> Status: **Phase 1b — npm light mode shipped.** The `--sandbox` flag routes
+> npm packages through the Birdcage backend (macOS `sandbox-exec` + Linux
+> Landlock); other ecosystems and strict mode ship in later phases.
 
 ## Design principles
 
@@ -131,6 +132,52 @@ Rejected alternatives:
   secret redaction.
 - `tests/sandbox/test_prompt_injection_resistance.py` — `to_prompt_section()`
   escapes jailbreak tokens inside observed bytes.
+
+## macOS coverage matrix
+
+Per-surface breakdown for `--sandbox` (Birdcage light mode) on macOS.
+`sandbox-exec` / SBPL enforces at the kernel level; Linux Landlock ≤6.6 has
+no network primitive, so network isolation is cooperative + observed only.
+
+| Surface | macOS (SBPL) | Notes |
+|---|---|---|
+| `syscall_trace` | skipped | Birdcage is Landlock/SBPL only — no ptrace tracing in light mode |
+| `network_capture` | **kernel-enforced** (`(deny network*)`) | All TCP/UDP/DNS blocked by XNU at the socket layer |
+| `fs_writes` | **kernel-enforced** (SBPL `file-write*` allowlist) | Only `$SCRATCH_HOME` and `/tmp` writable |
+| `process_tree` | skipped | No PID-namespace isolation; PID tracking is best-effort via resource_probe |
+| `dns` | **kernel-enforced** (subsumed by `deny network*`) | Same socket-layer block as network_capture |
+| `import_probe` | skipped (Phase 2) | Post-install probe commands not yet wired |
+| `build_time_hooks` | **observed** (exec events) | `postinstall`/`preinstall` exec chain captured |
+| `env_reads` | skipped | No uprobes without SIP-disabled root; DTrace restricted |
+| `canary_absolute_path_writes` | skipped (known gap) | See §macOS absolute-path-write gap above |
+
+## Linux-light enforcement tiers
+
+Linux Landlock (kernel ≥5.13) provides filesystem isolation but **no network
+primitive before kernel 6.7**. Network enforcement in light mode is therefore
+split across three cooperating tiers — not kernel-enforced:
+
+1. **Cooperative (npm client):** npm is invoked with `--offline`,
+   `NPM_CONFIG_OFFLINE=true`, and `NPM_CONFIG_REGISTRY=http://127.0.0.1:1`.
+   A well-behaved npm will not attempt registry connections. This is the first
+   and cheapest line of defence.
+
+2. **Observed (connect-observer: strace / bpftrace):** A connect-observer
+   shadows the subprocess tree for `connect(2)` / `sendto(2)` syscalls.
+   Any rogue postinstall script that bypasses npm's offline mode is recorded
+   as a `connect` event in `DynamicTrace.events`. The observer is detected by
+   `detect_linux_connect_observer()` at runtime; `aigate doctor --sandbox`
+   surfaces the result.
+
+3. **Kernel (Phase 4 — strict mode):** `--sandbox=strict` wires Docker +
+   `seccomp` + `iptables` drop-all for kernel-enforced network denial. Until
+   then, Linux network enforcement is cooperative + observed only.
+
+**Implication:** on Linux light mode a determined postinstall script can
+attempt a network connection without being kernel-blocked. The attempt IS
+observed (tier 2) and recorded in the trace; the AI prompt marks the
+`NETWORK_CAPTURE` surface as cooperative-only so the model does not treat
+absence-of-event as proof of no-attempt.
 
 ## See also
 
