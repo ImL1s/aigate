@@ -246,6 +246,15 @@ async def _check(
             total_ms = int((time.monotonic() - start) * 1000)
             if not use_json:
                 console.print("[dim](cached result)[/dim]")
+                # Reviewer bug_016 / US-011: --emit-opensrc on a cache hit
+                # silently skipped emit before; surface a hint so users aren't
+                # mystified about empty ~/.opensrc/ writes.
+                if emit_opensrc is True:
+                    console.print(
+                        "[yellow]opensrc-emit skipped: cache hit short-circuited the "
+                        "download path. Re-run without --skip-ai (or invalidate the "
+                        "cache) to emit.[/yellow]"
+                    )
             report = _report_from_cached(
                 cached, fallback_package=package, total_latency_ms=total_ms
             )
@@ -1276,7 +1285,7 @@ def _parse_lockfile(path: str) -> list[tuple[str, str]]:
                 ver = stripped.split("version:")[1].strip().strip('"')
                 packages.append((current_name, ver))
                 current_name = None
-    elif p.name == "Cargo.lock":
+    elif p.name.lower() == "cargo.lock":  # Reviewer bug_007 / US-011: case-insensitive
         # Cargo.lock is TOML, one [[package]] table per dependency.
         # We only scan crates.io-registry entries; git deps, path deps, and
         # workspace members are skipped (different trust / resolution).
