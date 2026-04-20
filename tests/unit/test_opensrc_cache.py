@@ -175,14 +175,13 @@ class TestShouldEmit:
         assert reason == "source_unavailable"
 
     def test_should_emit_refuses_high_prefilter_when_no_consensus(self, tmp_path: Path):
-        """US-003 / Reviewer IMP-4: --skip-ai + prefilter HIGH must not emit.
+        """US-003 + US-007: --skip-ai + prefilter HIGH must not emit.
 
-        Without this gate, a malicious crates package with build.rs+reqwest
-        flagged HIGH at the prefilter layer (decision = MALICIOUS, exit 2)
-        would still write its bytes to ~/.opensrc/ when --emit-opensrc is set,
-        because should_emit only inspected the consensus verdict. AI-agents
-        reading the cache would see the malicious package as a legitimate
-        source.
+        US-007 broadened this to a global "no consensus → no emit" gate
+        (Reviewer bug_004), so the reason string is now `ai_consensus_skipped`
+        rather than the narrower `prefilter_high_risk`. Behavior is preserved:
+        a malicious crates package with build.rs+reqwest flagged HIGH still
+        cannot leak into ~/.opensrc/ via --skip-ai+--emit-opensrc.
         """
         cfg = _make_config(tmp_root=tmp_path, enabled=True)
         pkg = PackageInfo(
@@ -204,10 +203,11 @@ class TestShouldEmit:
         )
         ok, reason = should_emit(rpt, cfg, flag_override=True)
         assert ok is False
-        assert reason == "prefilter_high_risk"
+        assert reason == "ai_consensus_skipped"
 
     def test_should_emit_refuses_critical_prefilter_when_no_consensus(self, tmp_path: Path):
-        """US-003: same gate fires for CRITICAL too (e.g. blocklisted package)."""
+        """US-003 + US-007: CRITICAL prefilter + no consensus also refused
+        under the broader "no consensus → no emit" gate."""
         cfg = _make_config(tmp_root=tmp_path, enabled=True)
         pkg = PackageInfo(name="known-bad", version="1.0", ecosystem="npm", repository="")
         rpt = AnalysisReport(
@@ -223,7 +223,26 @@ class TestShouldEmit:
         )
         ok, reason = should_emit(rpt, cfg, flag_override=True)
         assert ok is False
-        assert reason == "prefilter_high_risk"
+        assert reason == "ai_consensus_skipped"
+
+    def test_should_emit_refuses_when_consensus_is_none_clean_prefilter(self, tmp_path: Path):
+        """US-007 / Reviewer bug_004: even on a clean prefilter, no AI consensus
+        means we cannot honour the opensrc trust contract ('AI-vetted bytes').
+        Sentinel must not claim SAFE without AI ever running."""
+        cfg = _make_config(tmp_root=tmp_path, enabled=True)
+        pkg = PackageInfo(name="clean-pkg", version="1.0", ecosystem="npm", repository="")
+        rpt = AnalysisReport(
+            package=pkg,
+            prefilter=PrefilterResult(
+                passed=True,
+                reason="No risk signals",
+                risk_level=RiskLevel.NONE,
+            ),
+            consensus=None,  # --skip-ai with clean prefilter
+        )
+        ok, reason = should_emit(rpt, cfg, flag_override=True)
+        assert ok is False
+        assert reason == "ai_consensus_skipped"
 
     def test_should_emit_allows_high_prefilter_when_consensus_says_safe(self, tmp_path: Path):
         """US-003: when AI ran AND said SAFE, prefilter signals are by design

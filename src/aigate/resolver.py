@@ -212,21 +212,40 @@ async def _resolve_crates(
     + proc-macros still run at ``cargo build`` time — the prefilter flags
     those via crates-specific rules (see ``rules/builtin/crates_rules.yml``).
     """
-    # Version-specific endpoint returns ``{ "version": {...} }``. Without a
-    # version we hit the crate-wide endpoint which carries the full payload.
-    url = f"{CRATES_API}/{name}" if not version else f"{CRATES_API}/{name}/{version}"
-    if client:
-        resp = await client.get(url)
-        resp.raise_for_status()
-        data = resp.json()
-    else:
+    # Version-specific endpoint returns ``{ "version": {...} }`` with NO
+    # crate-level fields (repository/homepage/description live only on the
+    # crate-wide payload). When version is supplied we therefore issue BOTH
+    # requests so the version-pinned `aigate check serde -v 1.0.200` returns
+    # the same metadata shape as the versionless lookup. Reviewer bug_018 / US-009.
+    crate_url = f"{CRATES_API}/{name}"
+    version_url = f"{CRATES_API}/{name}/{version}" if version else None
+
+    async def _fetch(url: str) -> dict:
+        if client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            return resp.json()
         async with httpx.AsyncClient(timeout=30) as c:
             resp = await c.get(url)
             resp.raise_for_status()
-            data = resp.json()
+            return resp.json()
 
-    crate_data = data.get("crate") or {}
-    versions = data.get("versions") or []
+    if version_url:
+        # Fire both requests concurrently for the version-pinned path
+        import asyncio as _aio
+
+        crate_data_resp, version_resp = await _aio.gather(
+            _fetch(crate_url),
+            _fetch(version_url),
+        )
+        crate_data = crate_data_resp.get("crate") or {}
+        versions = crate_data_resp.get("versions") or []
+        # Merge: the per-version endpoint provides the canonical version_entry
+        data = {"crate": crate_data, "versions": versions, "version": version_resp.get("version")}
+    else:
+        data = await _fetch(crate_url)
+        crate_data = data.get("crate") or {}
+        versions = data.get("versions") or []
 
     version_entry: dict = {}
     if version:
@@ -361,7 +380,7 @@ async def _download_jsr_source(
     resp.raise_for_status()
     content = resp.content
     if len(content) > MAX_ARCHIVE_SIZE:
-        raise ValueError(f"Archive too large: {len(content)} bytes (max {MAX_ARCHIVE_SIZE})")
+        raise ValueError(f"archive_oversized: {len(content)} bytes exceeds cap {MAX_ARCHIVE_SIZE}")
 
     return _extract_archive(content, tarball_url)
 
@@ -441,7 +460,7 @@ async def _download_pypi_source(
     resp.raise_for_status()
     content = resp.content
     if len(content) > MAX_ARCHIVE_SIZE:
-        raise ValueError(f"Archive too large: {len(content)} bytes (max {MAX_ARCHIVE_SIZE})")
+        raise ValueError(f"archive_oversized: {len(content)} bytes exceeds cap {MAX_ARCHIVE_SIZE}")
 
     return _extract_archive(content, download_url)
 
@@ -471,7 +490,7 @@ async def _download_npm_source(
     resp.raise_for_status()
     content = resp.content
     if len(content) > MAX_ARCHIVE_SIZE:
-        raise ValueError(f"Archive too large: {len(content)} bytes (max {MAX_ARCHIVE_SIZE})")
+        raise ValueError(f"archive_oversized: {len(content)} bytes exceeds cap {MAX_ARCHIVE_SIZE}")
 
     return _extract_archive(content, tarball_url)
 
@@ -501,7 +520,7 @@ async def _download_pub_source(
     resp.raise_for_status()
     content = resp.content
     if len(content) > MAX_ARCHIVE_SIZE:
-        raise ValueError(f"Archive too large: {len(content)} bytes (max {MAX_ARCHIVE_SIZE})")
+        raise ValueError(f"archive_oversized: {len(content)} bytes exceeds cap {MAX_ARCHIVE_SIZE}")
 
     return _extract_archive(content, tarball_url)
 
@@ -653,9 +672,11 @@ async def _resolve_cocoapods(
         description=str(data.get("summary") or data.get("description", "") or ""),
         homepage=homepage,
         repository=repository,
-        has_install_scripts=bool(
-            source.get("prepare_command") if isinstance(source, dict) else False
-        ),
+        # Reviewer merged_bug_001 / US-008: prepare_command and script_phases
+        # are TOP-LEVEL podspec attributes per the CocoaPods spec, not nested
+        # inside `source`. Reading from `source` previously made this False
+        # for every real-world podspec.
+        has_install_scripts=bool(data.get("prepare_command") or data.get("script_phases")),
         dependencies=list((data.get("dependencies") or {}).keys()),
         metadata={"podspec": data, "source": source},
     )
@@ -744,7 +765,7 @@ async def _download_cocoapods_http(
     resp.raise_for_status()
     content = resp.content
     if len(content) > MAX_ARCHIVE_SIZE:
-        raise ValueError(f"Archive too large: {len(content)} bytes (max {MAX_ARCHIVE_SIZE})")
+        raise ValueError(f"archive_oversized: {len(content)} bytes exceeds cap {MAX_ARCHIVE_SIZE}")
 
     # Detect archive type: explicit ``type`` hint first, fall back to URL suffix
     archive_type = str(source.get("type") or "").lower()
@@ -758,7 +779,17 @@ async def _download_cocoapods_http(
             archive_type = "tar.gz"
         elif lowered.endswith(".tar"):
             archive_type = "tar"
-    archive_name = f"source.{archive_type or 'tar.gz'}"
+    # Reviewer bug_023 / US-007: _extract_archive only supports tar.gz / zip.
+    # Other valid podspec types (tar / tbz / txz / tlz) fall through silently
+    # to an empty source_files dict → SAFE on uninspected bytes. Refuse here
+    # so cli.py routes the verdict to NEEDS_HUMAN_REVIEW.
+    supported_types = {"tar.gz", "tgz", "zip"}
+    if archive_type not in supported_types:
+        raise SourceUnavailableError(
+            f"CocoaPods http source has unsupported archive type "
+            f"'{archive_type or 'unknown'}' for {http_url}; supported: {sorted(supported_types)}"
+        )
+    archive_name = f"source.{archive_type}"
     return _extract_archive(content, archive_name)
 
 
@@ -806,7 +837,7 @@ async def _fetch_github_tarball(
 
     content = resp.content
     if len(content) > MAX_ARCHIVE_SIZE:
-        raise ValueError(f"Archive too large: {len(content)} bytes (max {MAX_ARCHIVE_SIZE})")
+        raise ValueError(f"archive_oversized: {len(content)} bytes exceeds cap {MAX_ARCHIVE_SIZE}")
 
     archive_name = f"{owner}-{repo}-{ref}.tar.gz"
     files = _extract_archive(content, archive_name)
@@ -816,8 +847,12 @@ async def _fetch_github_tarball(
     # Detection needs the full tarball file list (including .gitattributes which
     # the default whitelist may drop), so we peek at the archive separately.
     tarball_manifest = _list_tarball_members(content, archive_name)
+    # US-008: forward podspec — source_files lives at podspec top-level, not
+    # inside the `source` hash. Without this the divergence detector silently
+    # finds nothing for every real-world podspec (Reviewer merged_bug_001).
     divergence = _detect_podspec_divergence(
         source=source,
+        podspec=podspec,
         files=files,
         tarball_manifest=tarball_manifest,
     )
@@ -894,6 +929,7 @@ def _detect_podspec_divergence(
     source: dict,
     files: dict[str, str],
     tarball_manifest: dict[str, bytes] | None = None,
+    podspec: dict | None = None,
 ) -> str | None:
     """Emit a one-line divergence message when the tarball looks suspicious.
 
@@ -938,8 +974,15 @@ def _detect_podspec_divergence(
         # Explanatory .gitattributes present -> no divergence signal
         return None
 
-    # Parse podspec source_files into top-level segments
-    source_files_field = source.get("source_files") if isinstance(source, dict) else None
+    # Parse podspec source_files into top-level segments. Per the CocoaPods
+    # spec, source_files is a TOP-LEVEL podspec attribute, not nested in the
+    # `source` hash. Prefer podspec; fall back to source for any caller that
+    # still passes a flat dict (Reviewer merged_bug_001 / US-008).
+    source_files_field = None
+    if isinstance(podspec, dict):
+        source_files_field = podspec.get("source_files")
+    if source_files_field is None and isinstance(source, dict):
+        source_files_field = source.get("source_files")
     advertised: list[str] = []
     if isinstance(source_files_field, str):
         advertised = [source_files_field]
@@ -1284,7 +1327,9 @@ async def download_from_local_pypi(
         resp.raise_for_status()
         content = resp.content
         if len(content) > MAX_ARCHIVE_SIZE:
-            raise ValueError(f"Archive too large: {len(content)} bytes (max {MAX_ARCHIVE_SIZE})")
+            raise ValueError(
+                f"archive_oversized: {len(content)} bytes exceeds cap {MAX_ARCHIVE_SIZE}"
+            )
 
     # The filename for _extract_archive needs to end with .tar.gz
     archive_name = tar_link.rsplit("/", 1)[-1] if "/" in tar_link else tar_link
