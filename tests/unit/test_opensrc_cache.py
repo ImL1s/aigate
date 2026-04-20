@@ -456,6 +456,94 @@ class TestFilesystemSummary:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Cross-process concurrency — US-005 / Reviewer CRITICAL-1
+# ---------------------------------------------------------------------------
+
+
+def _cross_process_worker(args: tuple[str, int]) -> str:
+    """Top-level worker for multiprocessing.Pool. Re-imports aigate, calls
+    emit_to_opensrc_cache for a unique (name, version) pair against the
+    shared HOME cache. Returns the rel_path on success or an error string."""
+    cache_dir_str, idx = args
+    try:
+        # multiprocessing.spawn re-imports module fresh; the test module's
+        # top-level imports of Config/Report/Verdict/etc are already available.
+        cfg = Config.default()
+        cfg.emit_opensrc = EmitOpensrcConfig(enabled=True, cache_dir=cache_dir_str)
+
+        pkg = PackageInfo(
+            name=f"pkg-{idx:03d}",
+            version="1.0.0",
+            ecosystem="npm",
+            repository=f"https://github.com/owner/pkg-{idx:03d}",
+        )
+        rpt = AnalysisReport(
+            package=pkg,
+            prefilter=PrefilterResult(passed=True, reason="ok", risk_level=RiskLevel.NONE),
+            consensus=ConsensusResult(final_verdict=Verdict.SAFE, confidence=0.9, summary=""),
+        )
+        result = emit_to_opensrc_cache(
+            pkg,
+            source_files={"index.js": f"// pkg {idx}\n"},
+            report=rpt,
+            config=cfg,
+            tarball_bytes=f"unique-bytes-{idx}".encode(),
+        )
+        return result.path or "<no path>"
+    except Exception as exc:
+        return f"ERROR[{idx}]: {type(exc).__name__}: {exc}"
+
+
+def test_concurrent_writers_cross_process_no_loss(tmp_path: Path):
+    """US-005 / Reviewer CRITICAL-1 reproducer: 32 distinct entries written
+    by 8 worker processes must all land in sources.json under flock.
+
+    The previous v1 implementation lost ~56% of entries under this load.
+    This test ensures we don't regress to that behavior on POSIX (where
+    fcntl.flock is available — i.e. macOS + Linux CI runners).
+    """
+    import multiprocessing as mp
+    import platform
+    import sys
+
+    if platform.system() == "Windows":
+        import pytest
+
+        pytest.skip("flock unavailable on Windows; optimistic fallback is best-effort")
+
+    n_entries = 32
+    n_workers = 8
+    cache_str = str(tmp_path)
+
+    # Use 'spawn' for portability across darwin/linux (matches default on macOS)
+    ctx = mp.get_context("spawn")
+    args = [(cache_str, i) for i in range(n_entries)]
+
+    # Need aigate importable in the spawned interpreters. The .venv is the
+    # current sys.executable which already has aigate installed editable.
+    with ctx.Pool(processes=n_workers) as pool:
+        results = pool.map(_cross_process_worker, args)
+
+    errors = [r for r in results if r.startswith("ERROR")]
+    assert not errors, f"workers errored: {errors[:5]} (full count: {len(errors)})"
+    assert len(results) == n_entries
+
+    sources_path = tmp_path / SOURCES_JSON
+    assert sources_path.exists(), "sources.json was never created"
+    payload = json.loads(sources_path.read_text())
+    packages = payload.get("packages", [])
+
+    names = {p["name"] for p in packages}
+    expected = {f"pkg-{i:03d}" for i in range(n_entries)}
+    missing = expected - names
+    assert not missing, (
+        f"flock-protected concurrent write lost {len(missing)} entries: "
+        f"{sorted(missing)[:10]} (got {len(names)}/{n_entries}); "
+        f"sys.executable={sys.executable}"
+    )
+
+
 def test_opensrc_emit_result_default_values():
     r = OpensrcEmitResult()
     assert r.emitted is False
