@@ -86,7 +86,7 @@ class Config:
     max_analysis_level: str = "l2_deep"  # l1_quick, l2_deep, l3_expert
     output_format: str = "rich"  # rich, json, sarif
     ecosystems: list[str] = field(
-        default_factory=lambda: ["pypi", "npm", "pub", "crates", "cocoapods"]
+        default_factory=lambda: ["pypi", "npm", "pub", "crates", "cocoapods", "jsr"]
     )
     enrichment: EnrichmentConfig = field(default_factory=EnrichmentConfig)
     rules_dir: str = ""  # extra rules directory (e.g. ~/.aigate/rules/)
@@ -191,7 +191,7 @@ def _parse_config(path: Path) -> Config:
         cache_ttl_hours=raw.get("cache_ttl_hours", 168),
         max_analysis_level=raw.get("max_analysis_level", "l2_deep"),
         output_format=raw.get("output_format", "rich"),
-        ecosystems=raw.get("ecosystems", ["pypi", "npm", "pub", "crates", "cocoapods"]),
+        ecosystems=raw.get("ecosystems", ["pypi", "npm", "pub", "crates", "cocoapods", "jsr"]),
         enrichment=_parse_enrichment(raw.get("enrichment", {})),
         rules_dir=rules_dir,
         disable_rules=disable_rules,
