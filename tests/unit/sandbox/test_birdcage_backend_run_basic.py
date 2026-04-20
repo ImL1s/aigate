@@ -113,8 +113,13 @@ async def test_happy_path_fs_writes_observed():
 
 
 async def test_happy_path_no_unexpected_skips():
+    # Pin to macOS semantics — Linux-light now injects NETWORK_CAPTURE into
+    # skipped_unexpected because the connect-observer is gated but not yet
+    # wired in Phase 1b (reviewer P1 on fda6dbf). macOS path has no such
+    # injection, so skipped_unexpected stays empty on the happy path.
     proc = _mock_proc(returncode=0, stdout=_FIVE_EVENTS_STDOUT)
-    trace = await _run_with_mock(proc)
+    with patch("aigate.sandbox.birdcage_backend.platform.system", return_value="Darwin"):
+        trace = await _run_with_mock(proc)
     assert trace.skipped_unexpected == set()
 
 
