@@ -210,7 +210,7 @@ async def _resolve_crates(
 
     Crates don't have an install-script step aigate executes, but ``build.rs``
     + proc-macros still run at ``cargo build`` time — the prefilter flags
-    those via crates-specific rules (see ``rules/builtin/crates_rules.yml``).
+    those via ``check_crates_risks`` in ``prefilter.py``.
     """
     # Version-specific endpoint returns ``{ "version": {...} }`` with NO
     # crate-level fields (repository/homepage/description live only on the

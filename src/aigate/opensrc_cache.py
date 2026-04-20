@@ -8,13 +8,17 @@ Key invariants:
 
 * Pure Python — no ``npx opensrc`` shell-out.
 * Atomic-replace idiom for ``sources.json`` writes (tempfile + ``os.replace``),
-  matching ``cache.py:76-83``. No flock.
-* 3-retry optimistic concurrency via ``asyncio.to_thread`` for async callers.
+  matching ``cache.py:76-83``.
+* Cross-process serialization via ``fcntl.flock(LOCK_EX)`` on a sidecar
+  ``.sources.json.lock`` file (POSIX). Windows falls back to optimistic
+  concurrency with retry. Same-process threads serialize via a
+  module-level ``threading.Lock``.
 * Per-package ``aigate-provenance.json`` sentinel records tarball SHA256 so
   re-emits are idempotent and opensrc-written bytes are never silently
   overwritten (collision policy, §3.1 T-COL-1..6).
 * ``should_emit`` gates: config enabled + CLI flag + verdict != MALICIOUS +
-  ``source_unavailable != True`` + collision policy approves.
+  ``source_unavailable != True`` + ``consensus is not None`` + collision
+  policy approves.
 """
 
 from __future__ import annotations
@@ -27,7 +31,7 @@ import random
 import re
 import tempfile
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -284,17 +288,6 @@ def _is_source_unavailable(report: AnalysisReport) -> bool:
         if needle in s:
             return True
     return False
-
-
-@dataclass
-class EmitContext:
-    """Bundle of inputs to ``emit_to_opensrc_cache``."""
-
-    package: PackageInfo
-    source_files: dict[str, str] = field(default_factory=dict)
-    tarball_bytes: bytes | None = None
-    report: AnalysisReport | None = None
-    config: Config | None = None
 
 
 def _compute_sha256(tarball_bytes: bytes | None, source_files: dict[str, str]) -> str:
