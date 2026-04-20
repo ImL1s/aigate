@@ -625,3 +625,81 @@ def test_json_dumps_podspec_metadata_is_round_trippable():
         "source": {"git": "https://github.com/AFNetworking/AFNetworking.git", "tag": "4.0.1"},
     }
     assert json.loads(json.dumps(payload)) == payload
+
+
+# ---------------------------------------------------------------------------
+# US-004 / Reviewer CRITICAL-3: tar-bomb DoS guards on _list_tarball_members
+# ---------------------------------------------------------------------------
+
+
+def _build_tarball(entries: list[tuple[str, bytes]]) -> bytes:
+    """Build an in-memory tar.gz with the given (name, content) members."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for name, content in entries:
+            info = tarfile.TarInfo(name=name)
+            info.size = len(content)
+            tar.addfile(info, io.BytesIO(content))
+    return buf.getvalue()
+
+
+def test_list_tarball_members_caps_member_count(caplog):
+    """Reviewer CRITICAL-3: a tarball with > _MAX_MANIFEST_MEMBERS files
+    must NOT be enumerated past the cap. We construct cap+500 small files;
+    expect manifest length capped and a warning logged."""
+    import logging
+
+    from aigate.resolver import _MAX_MANIFEST_MEMBERS, _list_tarball_members
+
+    entries = [(f"pkg-1.0/file_{i:05d}.txt", b"hi") for i in range(_MAX_MANIFEST_MEMBERS + 500)]
+    blob = _build_tarball(entries)
+
+    with caplog.at_level(logging.WARNING):
+        manifest = _list_tarball_members(blob, "x.tar.gz")
+
+    assert len(manifest) <= _MAX_MANIFEST_MEMBERS, (
+        f"manifest size {len(manifest)} should not exceed cap {_MAX_MANIFEST_MEMBERS}"
+    )
+    assert any("member cap" in rec.message for rec in caplog.records), (
+        "expected a tar-bomb member-cap warning"
+    )
+
+
+def test_list_tarball_members_caps_cumulative_bytes(caplog):
+    """Reviewer CRITICAL-3: cumulative read bytes past _MAX_MANIFEST_BYTES
+    must short-circuit. We pack enough 64KB members to exceed the cap."""
+    import logging
+
+    from aigate.resolver import _MAX_MANIFEST_BYTES, _list_tarball_members
+
+    chunk = b"a" * (64 * 1024)  # 64KB — equals the per-member read cap
+    members = (_MAX_MANIFEST_BYTES // (64 * 1024)) + 50
+    entries = [(f"pkg-1.0/big_{i:04d}.bin", chunk) for i in range(members)]
+    blob = _build_tarball(entries)
+
+    with caplog.at_level(logging.WARNING):
+        manifest = _list_tarball_members(blob, "x.tar.gz")
+
+    total = sum(len(v) for v in manifest.values())
+    assert total <= _MAX_MANIFEST_BYTES + 64 * 1024, (
+        f"cumulative bytes {total} broke the {_MAX_MANIFEST_BYTES} cap"
+    )
+    assert any("cumulative cap" in rec.message for rec in caplog.records), (
+        "expected a tar-bomb cumulative-byte-cap warning"
+    )
+
+
+def test_list_tarball_members_normal_tarball_unaffected():
+    """The cap must not break legitimate small tarballs."""
+    from aigate.resolver import _list_tarball_members
+
+    entries = [
+        ("pkg-1.0/Sources/Header.h", b"#pragma once\n"),
+        ("pkg-1.0/Sources/Impl.m", b"@implementation X\n@end\n"),
+        ("pkg-1.0/.gitattributes", b"*.swift export-ignore\n"),
+    ]
+    blob = _build_tarball(entries)
+    manifest = _list_tarball_members(blob, "x.tar.gz")
+    assert "pkg-1.0/Sources/Header.h" in manifest
+    assert "pkg-1.0/.gitattributes" in manifest
+    assert manifest["pkg-1.0/.gitattributes"] == b"*.swift export-ignore\n"

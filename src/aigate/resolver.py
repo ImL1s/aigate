@@ -828,14 +828,25 @@ async def _fetch_github_tarball(
     return files
 
 
+_MAX_MANIFEST_MEMBERS = 5_000  # tar-bomb guard: bail if a tarball has too many entries
+_MAX_MANIFEST_BYTES = 10 * 1024 * 1024  # 10MB cumulative cap on manifest payloads
+
+
 def _list_tarball_members(content: bytes, archive_name: str) -> dict[str, bytes]:
     """Return ``{member_name: bytes or empty}`` for every file in a tarball.
 
     Unlike ``_extract_archive`` this does not filter by extension — divergence
     detection needs to see files like ``.gitattributes`` that the text-file
     whitelist drops. Returns empty dict on extraction failure.
+
+    Tar-bomb defense (Reviewer CRITICAL-3): bail and log a warning when the
+    manifest grows past ``_MAX_MANIFEST_MEMBERS`` entries OR
+    ``_MAX_MANIFEST_BYTES`` cumulative bytes — a malicious podspec could
+    otherwise point at a tarball with hundreds of thousands of small members
+    and DoS the divergence-detection path.
     """
     manifest: dict[str, bytes] = {}
+    cumulative_bytes = 0
     try:
         if archive_name.endswith((".tar.gz", ".tgz")):
             with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as tar:
@@ -844,13 +855,31 @@ def _list_tarball_members(content: bytes, archive_name: str) -> dict[str, bytes]
                         continue
                     if not _is_path_safe(member.name):
                         continue
+                    if len(manifest) >= _MAX_MANIFEST_MEMBERS:
+                        logger.warning(
+                            "tarball manifest hit %d-member cap for %s; stopping divergence scan",
+                            _MAX_MANIFEST_MEMBERS,
+                            archive_name,
+                        )
+                        break
                     try:
                         f = tar.extractfile(member)
                         if f is None:
                             manifest[member.name] = b""
-                        else:
-                            # Cap per-member at 64KB — we only inspect for substrings.
-                            manifest[member.name] = f.read(64 * 1024)
+                            continue
+                        # Cap per-member at 64KB — we only inspect for substrings.
+                        chunk = f.read(64 * 1024)
+                        cumulative_bytes += len(chunk)
+                        if cumulative_bytes > _MAX_MANIFEST_BYTES:
+                            logger.warning(
+                                "tarball manifest hit %d-byte cumulative cap for %s; "
+                                "stopping divergence scan",
+                                _MAX_MANIFEST_BYTES,
+                                archive_name,
+                            )
+                            manifest[member.name] = chunk
+                            break
+                        manifest[member.name] = chunk
                     except Exception:
                         manifest[member.name] = b""
     except (tarfile.TarError, EOFError, OSError):
