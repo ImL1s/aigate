@@ -39,6 +39,7 @@ from .types import (
     SandboxBackend,
     SandboxCoverage,
     SandboxMode,
+    SandboxRunRequest,
 )
 
 __all__ = [
@@ -47,6 +48,7 @@ __all__ = [
     # Types / enums
     "SandboxCoverage",
     "SandboxMode",
+    "SandboxRunRequest",
     "DynamicTraceEvent",
     "DynamicTrace",
     # Tier floors
