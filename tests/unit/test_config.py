@@ -261,3 +261,30 @@ class TestSandboxConfig:
         assert c.sandbox.cache.enabled is False
         assert c.sandbox.cache.ttl_hours == 24
         assert c.sandbox.cache.location == "/tmp/sbxcache/"
+
+    def test_parse_sandbox_scalar_true_falls_back_to_defaults(self, tmp_path: Path, caplog):
+        """Codex P2: `sandbox: true` shorthand must not crash config load.
+
+        Before the fix this raised AttributeError because _parse_sandbox
+        called raw.get(...) on a bool. Now it WARNs and returns defaults.
+        """
+        import logging
+
+        f = tmp_path / ".aigate.yml"
+        f.write_text("sandbox: true\n")
+        with caplog.at_level(logging.WARNING, logger="aigate.config"):
+            c = _parse_config(f)
+        assert c.sandbox.enabled is False  # falls back to default
+        assert any("Invalid sandbox config" in rec.getMessage() for rec in caplog.records), (
+            f"expected WARN on scalar sandbox, got: {[r.getMessage() for r in caplog.records]}"
+        )
+
+    def test_parse_sandbox_string_falls_back_to_defaults(self, tmp_path: Path, caplog):
+        """Same Codex P2 hardening for `sandbox: enabled` (string)."""
+        import logging
+
+        f = tmp_path / ".aigate.yml"
+        f.write_text("sandbox: enabled\n")
+        with caplog.at_level(logging.WARNING, logger="aigate.config"):
+            c = _parse_config(f)
+        assert c.sandbox.enabled is False

@@ -502,15 +502,29 @@ def _parse_sandbox_gate(raw: dict | None, *, default: SandboxCommandGate) -> San
     )
 
 
-def _parse_sandbox(raw: dict | None) -> SandboxConfig:
+def _parse_sandbox(raw: object) -> SandboxConfig:
     """Parse the ``sandbox:`` block of ``.aigate.yml`` (PRD §3.4).
 
     Unknown keys are silently ignored so the config stays forward-compatible
     as later phases add surfaces (e.g. a Tracee rule-pack override).
     Invalid enum values log WARN and fall back to the PRD default — never
     silently enable a less-safe surface (Principle 1).
+
+    Non-dict YAML (e.g. ``sandbox: true`` shorthand) is tolerated: we WARN
+    and fall back to defaults rather than crash with AttributeError
+    (Codex review P2).
     """
-    if not raw:
+    if raw is None or raw == "" or raw is False:
+        return SandboxConfig()
+    if not isinstance(raw, dict):
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "Invalid sandbox config (expected mapping, got %s=%r); "
+            "using defaults. Use a nested YAML block, e.g. 'sandbox:\\n  enabled: true'.",
+            type(raw).__name__,
+            raw,
+        )
         return SandboxConfig()
     defaults = SandboxConfig()
     check_default = SandboxCommandGate(eager=True, min_prefilter_severity="none")

@@ -212,3 +212,41 @@ def test_classify_skips_strict_mode_treats_all_missing_as_unexpected():
     expected, unexpected = SandboxBackend.classify_skips(SandboxMode.STRICT, observed, attempted)
     assert expected == set()
     assert unexpected == {SandboxCoverage.SYSCALL_TRACE, SandboxCoverage.DNS}
+
+
+# ---------------------------------------------------------------------------
+# Codex P1 fix: timeout must trip has_observation_failure (never SAFE on
+# truncated observation)
+# ---------------------------------------------------------------------------
+
+
+def test_timeout_run_with_many_events_still_trips_observation_failure():
+    """Codex P1: a timed-out run that happens to exceed the floor must
+    STILL escalate to NEEDS_REVIEW. Otherwise malicious behavior deferred
+    beyond the timeout window rides on the clean observed prefix."""
+    trace = DynamicTrace(
+        ran=True,
+        runtime="birdcage",
+        duration_ms=30000,
+        timeout=True,  # wall-clock budget exceeded
+        events=[
+            DynamicTraceEvent(kind=k, ts_ms=i * 100, pid=1, process="sh")
+            for i, k in enumerate(("exec", "open", "write", "dns") * 5)
+        ],  # 20 events, 4 distinct kinds — normally clears the floor
+    )
+    assert trace.has_observation_failure() is True
+
+
+def test_clean_non_timeout_run_with_many_events_does_not_fail():
+    """Control: same shape as above but timeout=False → no failure."""
+    trace = DynamicTrace(
+        ran=True,
+        runtime="birdcage",
+        duration_ms=30000,
+        timeout=False,
+        events=[
+            DynamicTraceEvent(kind=k, ts_ms=i * 100, pid=1, process="sh")
+            for i, k in enumerate(("exec", "open", "write", "dns") * 5)
+        ],
+    )
+    assert trace.has_observation_failure() is False

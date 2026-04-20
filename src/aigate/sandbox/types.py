@@ -173,8 +173,14 @@ class DynamicTrace:
         Only this method — never ``skipped_expected`` alone — should
         flip ``source_unavailable=True`` downstream. Expected-for-tier
         skips are documented coverage gaps, not observation failures.
+
+        Wall-clock timeout (``self.timeout``) is treated as an
+        observation failure: a run that exceeded budget may have
+        malicious behavior deferred beyond the cutoff, so the verdict
+        must escalate to ``NEEDS_HUMAN_REVIEW`` rather than ride on
+        whatever events fit in the window (Codex review P1).
         """
-        if self.skipped_unexpected or self.error is not None:
+        if self.timeout or self.skipped_unexpected or self.error is not None:
             return True
         if self.ran and self.duration_ms >= self.FLOOR_APPLIES_IF_DURATION_MS_GTE:
             kinds = {e.kind for e in self.events}
