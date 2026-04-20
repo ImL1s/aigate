@@ -156,6 +156,18 @@ class BirdcageBackend(SandboxBackend):
     name = "birdcage"
 
     def check_available(self) -> bool:
+        """Return True iff Birdcage + (on Linux) a connect-observer are reachable.
+
+        **Phase 1b caveat (reviewer P1):** the Linux observer gate requires
+        strace/bpftrace to be present on PATH, but ``_run_inside_scratch`` does
+        NOT yet prepend that observer to the birdcage argv — real runs
+        produce only npm's human-readable stdout, yield 0 parsed events, and
+        trip ``PARSER_PARTIAL_DRIFT``/``NETWORK_CAPTURE`` so every Linux-light
+        scan escalates to ``NEEDS_HUMAN_REVIEW`` until Phase 2 wires the
+        observer into argv. The gate is kept (rather than loosened) so
+        hosts without an observer still fail closed via ``SandboxUnavailable``
+        when ``--sandbox-required`` is set.
+        """
         if shutil.which("birdcage") is None:
             return False
         if platform.system() == "Linux":
@@ -309,6 +321,14 @@ class BirdcageBackend(SandboxBackend):
         skipped_unexpected: set[SandboxCoverage] = set()
         if drift_cov is not None:
             skipped_unexpected.add(drift_cov)
+        # Phase 1b Linux-light: the connect-observer is gated in
+        # check_available() but never wired into argv yet (Phase 2). Record
+        # NETWORK_CAPTURE as explicitly unobserved so the policy layer always
+        # sees Linux-light runs as network-unchecked and escalates via
+        # has_observation_failure() — no reliance on the parser-0-lines
+        # side effect to surface the gap (reviewer P1).
+        if platform.system() == "Linux":
+            skipped_unexpected.add(SandboxCoverage.NETWORK_CAPTURE)
 
         error: str | None = None
         if timed_out:

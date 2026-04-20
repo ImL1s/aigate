@@ -72,6 +72,10 @@ async def _run_with_mock(proc: MagicMock, timeout_s: int = 10) -> object:
         patch("tempfile.mkdtemp", return_value="/tmp/aigate-sandbox-test"),
         patch("os.path.join", side_effect=lambda *a: "/".join(a)),
         patch("builtins.open", MagicMock()),
+        # Keep timeout tests hermetic — the mock proc.pid=42 would otherwise
+        # target a real process group when killpg fires (reviewer P2).
+        patch("aigate.sandbox.birdcage_backend.os.getpgid", return_value=42),
+        patch("aigate.sandbox.birdcage_backend.os.killpg"),
     ):
         backend = BirdcageBackend()
         return await backend.run(request)
