@@ -268,7 +268,9 @@ async def _check(
                     oversized_msg = msg
                     source_files = {}
                 else:
+                    # Other ValueError = bytes not inspected; degrade to NEEDS_REVIEW.
                     console.print(f"[yellow]Warning: Could not download source: {e}[/yellow]")
+                    source_unavailable_msg = msg
                     source_files = {}
             except SourceUnavailableError as e:
                 # Phase 3: bytes-not-inspected MUST NOT become SAFE
@@ -278,7 +280,11 @@ async def _check(
                 source_unavailable_msg = msg
                 source_files = {}
             except Exception as e:
+                # Broad-except catches httpx.ConnectError, asyncio.TimeoutError,
+                # tarfile.TarError, ExtractionError, etc. We have no inspected
+                # bytes — must not silently degrade to SAFE.
                 console.print(f"[yellow]Warning: Could not download source: {e}[/yellow]")
+                source_unavailable_msg = f"download_failed: {type(e).__name__}: {e}"
                 source_files = {}
 
     # 3. Static pre-filter

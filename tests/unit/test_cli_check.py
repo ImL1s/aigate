@@ -11,6 +11,14 @@ from aigate.config import Config
 from aigate.models import PackageInfo, PrefilterResult, RiskLevel
 
 
+def _extract_json(output: str) -> dict:
+    """Extract the JSON object from CLI output (warnings may precede it)."""
+    start = output.find("{")
+    if start < 0:
+        raise AssertionError(f"no JSON object in output: {output!r}")
+    return json.loads(output[start:])
+
+
 def _package(*, name: str = "demo", version: str = "1.0.0", ecosystem: str = "pypi") -> PackageInfo:
     return PackageInfo(
         name=name,
@@ -130,6 +138,72 @@ def test_check_cached_skip_ai_preserves_cached_decision(monkeypatch):
     assert payload["decision"] == "malicious"
     assert payload["exit_code"] == 2
     assert payload["consensus"]["final_verdict"] == "malicious"
+
+
+def test_check_download_failure_returns_needs_review_not_safe(monkeypatch):
+    """US-002 / Reviewer IMP-1: bare-except on download_source must set
+    source_unavailable so the policy layer (US-001) blocks SAFE leakage.
+    Reviewer found httpx.ConnectError, asyncio.TimeoutError, ExtractionError
+    etc. all silently producing SAFE before this fix."""
+    package = _package()
+
+    monkeypatch.setattr("aigate.cli.Config.load", lambda: Config())
+    # Skip persistent cache so prior runs don't shadow the download branch.
+    monkeypatch.setattr("aigate.cli.get_cached", lambda *a, **kw: None)
+    monkeypatch.setattr("aigate.cli.set_cached", lambda *a, **kw: None)
+
+    async def fake_resolve_package(_: str, __: str | None, ___: str) -> PackageInfo:
+        return package
+
+    async def fake_download_source(_: PackageInfo, **kw: object) -> dict[str, str]:
+        # Simulate the kind of error a bare-except would swallow:
+        # ConnectError / Timeout / ExtractionError / TarError all hit this branch.
+        raise RuntimeError("simulated httpx.ConnectError: tcp connection refused")
+
+    monkeypatch.setattr("aigate.cli.resolve_package", fake_resolve_package)
+    monkeypatch.setattr("aigate.cli.download_source", fake_download_source)
+
+    result = CliRunner().invoke(main, ["check", "demo", "--json", "--skip-ai"])
+
+    payload = _extract_json(result.output)
+    # Must be NEEDS_REVIEW (exit 1), not SAFE (exit 0)
+    assert result.exit_code == 1, (
+        f"download failure leaked to exit {result.exit_code}; payload: {payload}"
+    )
+    assert payload["decision"] == "needs_review"
+    assert payload["exit_code"] == 1
+    assert payload["prefilter"]["source_unavailable"] is True
+    assert any(
+        "source_unavailable" in str(s) and "download_failed" in str(s)
+        for s in payload["prefilter"]["risk_signals"]
+    )
+
+
+def test_check_value_error_non_oversized_returns_needs_review_not_safe(monkeypatch):
+    """US-002: a generic ValueError (not archive_oversized) on download must
+    also degrade to NEEDS_REVIEW, not silent SAFE. E.g. a corrupt tarball
+    raising ValueError from inside _extract_archive."""
+    package = _package()
+
+    monkeypatch.setattr("aigate.cli.Config.load", lambda: Config())
+    monkeypatch.setattr("aigate.cli.get_cached", lambda *a, **kw: None)
+    monkeypatch.setattr("aigate.cli.set_cached", lambda *a, **kw: None)
+
+    async def fake_resolve_package(_: str, __: str | None, ___: str) -> PackageInfo:
+        return package
+
+    async def fake_download_source(_: PackageInfo, **kw: object) -> dict[str, str]:
+        raise ValueError("malformed tarball: unexpected EOF in middle of stream")
+
+    monkeypatch.setattr("aigate.cli.resolve_package", fake_resolve_package)
+    monkeypatch.setattr("aigate.cli.download_source", fake_download_source)
+
+    result = CliRunner().invoke(main, ["check", "demo", "--json", "--skip-ai"])
+
+    payload = _extract_json(result.output)
+    assert result.exit_code == 1, f"non-oversized ValueError leaked exit {result.exit_code}"
+    assert payload["decision"] == "needs_review"
+    assert payload["prefilter"]["source_unavailable"] is True
 
 
 def test_check_accepts_pub_ecosystem(monkeypatch):
