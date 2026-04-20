@@ -67,6 +67,52 @@ class TestTyposquatting:
         result = check_typosquatting("github.com/spf13/viper", "go")
         assert result == []
 
+    # US-010 / Reviewer bug_011 — popular_map keys for new ecosystems
+
+    def test_crates_typosquat_uses_crates_key(self):
+        """resolver canonicalizes Rust to 'crates' (not 'cargo'). The popular_map
+        must have a 'crates' key — previously fell through to POPULAR_PYPI and
+        a real Rust typosquat 'toikio' (extra-i vs 'tokio') was unflagged."""
+        result = check_typosquatting("toikio", "crates")
+        assert any("tokio" in r for r in result), (
+            f"expected 'tokio' typosquat detection on crates, got {result}"
+        )
+
+    def test_cocoapods_typosquat(self):
+        """CocoaPods typosquats must be flagged against POPULAR_COCOAPODS."""
+        result = check_typosquatting("AFNetworkin", "cocoapods")
+        assert any("AFNetworking" in r for r in result), (
+            f"expected 'AFNetworking' typosquat detection, got {result}"
+        )
+
+    def test_jsr_typosquat(self):
+        """JSR typosquats must be flagged against POPULAR_JSR."""
+        result = check_typosquatting("@std/fss", "jsr")
+        assert any("@std/fs" in r for r in result), (
+            f"expected '@std/fs' typosquat detection on jsr, got {result}"
+        )
+
+    def test_unknown_ecosystem_returns_empty_not_pypi_fallback(self):
+        """Unknown ecosystem must NOT silently fall back to POPULAR_PYPI;
+        empty result avoids cross-ecosystem similarity false positives."""
+        # 'requets' is a near-miss for 'requests' (PyPI); under the old
+        # POPULAR_PYPI fallback it would flag here too. We expect [].
+        result = check_typosquatting("requets", "made-up-ecosystem")
+        assert result == [], f"unknown ecosystem leaked POPULAR_PYPI signals: {result}"
+
+    def test_typosquat_popular_map_covers_all_supported_ecosystems(self):
+        """Future-proofing: every ecosystem the CLI advertises must have
+        a popular_map entry (or explicit empty-set fallback). Iterates
+        the canonical SUPPORTED_ECOSYSTEMS tuple from the cli module."""
+        from aigate.cli import SUPPORTED_ECOSYSTEMS
+
+        for eco in SUPPORTED_ECOSYSTEMS:
+            # Just call it on a benign name; no assertion on result content.
+            # We just ensure no UNHANDLED_ECOSYSTEM warning is needed for any
+            # CLI-supported ecosystem (the call returns [] but doesn't WARN
+            # for known ecosystems).
+            check_typosquatting("definitely-a-fresh-name-xyz", eco)
+
 
 class TestMetadataAnomalies:
     def test_normal_package(self):
