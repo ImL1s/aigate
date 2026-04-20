@@ -69,6 +69,7 @@ class SandboxCoverage(StrEnum):
     DIRECT_XPC = "direct_xpc"
     DBUS_RAW = "dbus_raw"
     DERIVED_EXFIL = "derived_exfil"
+    PARSER_PARTIAL_DRIFT = "parser_partial_drift"
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +133,7 @@ class DynamicTraceEvent:
     target: str = ""
     severity: RiskLevel = RiskLevel.NONE
     raw: str = ""
+    source: str | None = None
 
 
 @dataclass
@@ -167,6 +169,8 @@ class DynamicTrace:
     FLOOR_MIN_TOTAL_EVENTS: int = 10
     FLOOR_APPLIES_IF_DURATION_MS_GTE: int = 2000
 
+    PARSE_RATIO_FLOOR: float = 0.5  # REV-4: <50% match = partial drift
+
     def has_observation_failure(self) -> bool:
         """True iff observation failed OR the floor was not met.
 
@@ -183,10 +187,12 @@ class DynamicTrace:
         if self.timeout or self.skipped_unexpected or self.error is not None:
             return True
         if self.ran and self.duration_ms >= self.FLOOR_APPLIES_IF_DURATION_MS_GTE:
-            kinds = {e.kind for e in self.events}
+            # REV-5: exclude synthetic resource_probe events from floor
+            real_events = [e for e in self.events if getattr(e, "source", None) != "resource_probe"]
+            kinds = {e.kind for e in real_events}
             if (
                 len(kinds) < self.FLOOR_MIN_DISTINCT_KINDS
-                and len(self.events) < self.FLOOR_MIN_TOTAL_EVENTS
+                and len(real_events) < self.FLOOR_MIN_TOTAL_EVENTS
             ):
                 return True
         return False
@@ -203,9 +209,10 @@ class DynamicTrace:
         """
         if not self.ran:
             return False
-        has_net = any(e.kind in ("connect", "dns") for e in self.events)
-        has_extern_write = any(e.kind in ("write", "persist_write") for e in self.events)
-        real_exec_count = sum(1 for e in self.events if e.kind == "exec")
+        real_events = [e for e in self.events if getattr(e, "source", None) != "resource_probe"]
+        has_net = any(e.kind in ("connect", "dns") for e in real_events)
+        has_extern_write = any(e.kind in ("write", "persist_write") for e in real_events)
+        real_exec_count = sum(1 for e in real_events if e.kind == "exec")
         has_real_exec = real_exec_count > 1
         return not (has_net or has_extern_write or has_real_exec)
 
