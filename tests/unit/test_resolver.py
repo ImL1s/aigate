@@ -9,6 +9,7 @@ from aigate.models import PackageInfo
 from aigate.resolver import (
     SKIP_DIRS,
     ExtractionError,
+    _archive_timeout,
     _extract_archive,
     _is_path_safe,
     download_source,
@@ -698,3 +699,21 @@ class TestSharedHttpxClient:
         monkeypatch.setattr("httpx.AsyncClient.__init__", counting_init)
         await resolve_package("testpkg", "1.0.0", "pypi", client=mock_client)
         assert call_count == 0, "Should not create new AsyncClient when one is provided"
+
+
+class TestArchiveTimeout:
+    """_archive_timeout reads AIGATE_DOWNLOAD_TIMEOUT_SECONDS with 30s fallback."""
+
+    def test_default_when_unset(self, monkeypatch):
+        monkeypatch.delenv("AIGATE_DOWNLOAD_TIMEOUT_SECONDS", raising=False)
+        assert _archive_timeout() == 30
+
+    @pytest.mark.parametrize("raw,expected", [("120", 120), ("1", 1), ("600", 600)])
+    def test_valid_override(self, monkeypatch, raw: str, expected: int):
+        monkeypatch.setenv("AIGATE_DOWNLOAD_TIMEOUT_SECONDS", raw)
+        assert _archive_timeout() == expected
+
+    @pytest.mark.parametrize("raw", ["abc", "", "  ", "1.5", "-5", "0"])
+    def test_invalid_or_nonpositive_falls_back_to_default(self, monkeypatch, raw: str):
+        monkeypatch.setenv("AIGATE_DOWNLOAD_TIMEOUT_SECONDS", raw)
+        assert _archive_timeout() == 30
