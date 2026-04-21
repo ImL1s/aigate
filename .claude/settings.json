@@ -9,6 +9,18 @@
             "command": "jq -r '.tool_input.file_path // .tool_response.filePath' | { read -r f; [[ \"$f\" == *.py ]] && ruff format \"$f\" 2>/dev/null; } || true",
             "timeout": 10,
             "statusMessage": "Formatting..."
+          },
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath' | { read -r f; [[ \"$f\" == *.py ]] && \"$CLAUDE_PROJECT_DIR/.venv/bin/ruff\" check --fix \"$f\" 2>/dev/null; } || true",
+            "timeout": 15,
+            "statusMessage": "Linting..."
+          },
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath' | { read -r f; [[ \"$f\" == */tests/*test_*.py && \"$f\" != *\"/tests/fixtures/\"* ]] && \"$CLAUDE_PROJECT_DIR/.venv/bin/python\" -m pytest \"$f\" -q -x --tb=short 2>/dev/null; } || true",
+            "timeout": 60,
+            "statusMessage": "Running edited test..."
           }
         ]
       }

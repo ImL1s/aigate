@@ -33,10 +33,18 @@ Async-first (httpx, asyncio subprocesses). Flow: CLI → Resolver → Pre-filter
 - **consensus.py** — Parallel multi-model analysis. Weighted votes: model_weight × confidence. Disagreement (MALICIOUS + SAFE) → NEEDS_HUMAN_REVIEW.
 - **backends/** — Claude/Gemini use CLI headless (`claude -p`, `gemini -p`). Ollama uses local HTTP API. All implement `AIBackend.analyze()`.
 - **resolver.py** — Downloads source archives (tar.gz/zip) and extracts text files. Never executes package code.
+- **sandbox/** — Analyzes static/behavioral signals only; never runs package code. Respect this security boundary when extending.
+
+## Skills
+
+Pre-installed in `.claude/skills/` — invoke with `/`:
+
+- `/verify` — lint + format check + full pytest. Run before commits.
+- `aigate-check` / `aigate-scan` / `check-package` — supply chain checks; the PreToolUse hook also auto-scans pip/npm/cargo/etc. install commands.
 
 ## Code Style
 
-- Python 3.11+, full type hints (`from __future__ import annotations`)
+- Python 3.11+ (CI matrix: 3.11 / 3.12 / 3.13 — keep compat with all three), full type hints (`from __future__ import annotations`)
 - Ruff: line-length 100, rules E/F/I/N/W/UP
 - Async everywhere — use `async def` + `httpx.AsyncClient`, not `requests`
 - Prefilter risk signals are strings like `"dangerous_pattern(HIGH): ..."` — keep this format
