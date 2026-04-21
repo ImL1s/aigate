@@ -116,23 +116,21 @@ def test_select_linux_observer_graceful_when_strace_observer_missing(monkeypatch
 
     monkeypatch.setattr("aigate.sandbox.runtime_select.shutil.which", _which)
 
-    # Temporarily hide the strace module if it exists
+    # Temporarily hide the strace module so ImportError is triggered.
+    # Always use a tombstone (None) so Python won't re-import from disk.
     strace_key = "aigate.sandbox.observers.strace"
-    had_module = strace_key in sys.modules
-    if had_module:
-        saved = sys.modules.pop(strace_key)
-    else:
-        # Inject a sentinel that causes ImportError
-        sys.modules[strace_key] = None  # type: ignore[assignment]
+    _missing = object()
+    saved = sys.modules.get(strace_key, _missing)
+    sys.modules[strace_key] = None  # type: ignore[assignment]
 
     try:
         result = select_linux_observer()
         assert result is None
     finally:
-        if had_module:
-            sys.modules[strace_key] = saved
-        else:
+        if saved is _missing:
             sys.modules.pop(strace_key, None)
+        else:
+            sys.modules[strace_key] = saved
 
 
 def test_select_linux_observer_returns_none_on_macos_path(monkeypatch):
