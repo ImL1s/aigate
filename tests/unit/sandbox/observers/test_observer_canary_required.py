@@ -137,7 +137,9 @@ def _read_birdcage_backend_source() -> str:
     if spec is not None and spec.origin:
         return Path(spec.origin).read_text()
     # Fallback: walk up from this test file to the repo root.
-    return (Path(__file__).parents[5] / "src/aigate/sandbox/birdcage_backend.py").read_text()
+    # Test is at tests/unit/sandbox/observers/<file> — 4 parents up to repo root
+    # (reviewer P2 PR #6 comment 3117485475 off-by-one fix).
+    return (Path(__file__).parents[4] / "src/aigate/sandbox/birdcage_backend.py").read_text()
 
 
 def test_canary_wrap_contains_canary_path() -> None:

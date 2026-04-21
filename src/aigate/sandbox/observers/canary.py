@@ -2,13 +2,15 @@
 
 The canary works as a parser-liveness proof:
 
-1. BirdcageBackend calls ``emit_canary_syscall(sink)`` just before the
-   observed child subprocess starts.
-2. A tiny harness subprocess opens ``CANARY_PATH`` (a path that does NOT
-   exist on disk → ENOENT).  strace captures the ``openat()`` syscall.
-3. ``StraceObserver.parse_event()`` recognises the path and emits
+1. BirdcageBackend prepends a ``sh -c`` wrapper (``canary_wrap``) to the
+   strace argv so the first traced child opens ``CANARY_PATH`` via
+   ``cat``. strace captures the ``openat()`` syscall as a traced
+   descendant (not a sibling process), satisfying the ptrace-scope
+   requirement (REV-B). See ``_run_inside_scratch`` in
+   ``birdcage_backend.py``.
+2. ``StraceObserver.parse_event()`` recognises the path and emits
    ``DynamicTraceEvent(kind="observer_canary", source="observer_canary")``.
-4. ``classify_network_capture_coverage()`` uses ``is_real_event()`` to
+3. ``classify_network_capture_coverage()`` uses ``is_real_event()`` to
    exclude the canary event from the real-event count, then decides
    whether NETWORK_CAPTURE belongs in ``observed`` or ``skipped_unexpected``.
 
@@ -16,6 +18,12 @@ REV-B invariant: ``real_event_count`` drives the coverage decision.  The
 canary event itself is *not* counted as evidence of package activity —
 it only demonstrates that the strace parser was alive before the install
 started.
+
+Historical note: earlier Phase 2 drafts emitted the canary via an
+``emit_canary_syscall(sink)`` sibling subprocess. That approach was
+removed in commit 53ced9f because a sibling process is outside strace's
+ptrace tree and the canary event never reached the FIFO (PR #6 P1
+comment 3117029517).
 """
 
 from __future__ import annotations
