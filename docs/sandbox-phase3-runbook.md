@@ -254,6 +254,18 @@ verdict = max(current_verdict, NEEDS_HUMAN_REVIEW)  # ← Use max()
 
 **Follow-up (F-11):** Post-merge telemetry will instrument the 1-HIGH branch; if ≥80% of human-reviewed packages in this category resolve to "actually malicious," the team will revisit option (b) in a future phase. For now, false-negative avoidance (letting a few malicious packages slip) is preferable to false-positive avalanche (auto-blocking legitimate packages).
 
+### Legacy Scoring Carve-Out (prefilter.py)
+
+The legacy `_calculate_risk_level` in `src/aigate/prefilter.py` pre-dates Phase 3 and auto-escalates any HIGH-severity signal to `RiskLevel.HIGH` (or CRITICAL at `high_count ≥ 2`). That path would bypass T14 by the time `decision_from_prefilter` sets `base_outcome = MALICIOUS` at `policy.py:113-123`.
+
+To honor REV-NI2 end-to-end, Phase 3 carves evasion categories out of the legacy HIGH count. `_is_evasion_signal(s)` returns True for any `RiskSignal` whose `.category` is in `_EVASION_CATEGORIES` (the 7 Phase 3 detectors). Those signals:
+
+- Are **excluded from `high_count`** so they never auto-trigger CRITICAL.
+- Are **counted toward the MEDIUM bucket** so they still drive `needs_ai_review = True`.
+- Flow through as structured `RiskSignal` (not stringified) so `decision_from_prefilter` sees them via `isinstance(s, RiskSignal)` and forwards to T14.
+
+**Contract:** Evasion verdicts are authoritative only through the T14 gate. Legacy `dangerous_pattern(HIGH)` / blocklist / behavior-chain HIGH signals keep their 1-HIGH-auto-HIGH behavior unchanged. Regression tests: `test_prefilter_preserves_evasion_risksignal_structured_form` + `test_single_high_evasion_does_not_auto_escalate_to_malicious` in `tests/integration/sandbox/evasion/test_prefilter_runs_evasion_static.py`.
+
 ### Link to PRD
 
 See `.omc/plans/aigate-sandbox-mode-prd.md` §3.2 "Evasion-aware by default" (Principle 4) and §3.4 "Tiered gating" for the policy-layer context. The PRD's decision drivers (§2.2) justify autonomous blocking only under high-confidence scenarios; Phase 3 implements this conservatively by requiring two orthogonal HIGH signals.
