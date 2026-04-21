@@ -20,58 +20,26 @@ started.
 
 from __future__ import annotations
 
-import subprocess
 from collections.abc import Sequence
 
 from ..types import DynamicTraceEvent, SandboxCoverage, is_real_event
-from .base import ObserverSink
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-#: Sentinel path opened by the canary harness subprocess.
+#: Sentinel path opened by the canary harness.
 #: MUST match ``strace.OBSERVER_CANARY_MARKER``.
 #: Deliberately non-existent on disk — the open() returns ENOENT, but
 #: strace captures the ``openat()`` syscall and the parser recognises it.
+#:
+#: The canary is emitted by BirdcageBackend via a ``sh -c`` wrapper that
+#: runs as the first traced child of strace (see
+#: ``_run_inside_scratch`` in birdcage_backend.py). The old
+#: ``emit_canary_syscall`` sibling-subprocess approach is gone — it was
+#: outside strace's ptrace tree and never reached the FIFO (PR #6 P1
+#: comment 3117029517 + follow-up 3117386064).
 CANARY_PATH: str = "/aigate-observer-canary"
-
-_CANARY_ARGV: tuple[str, ...] = (
-    "python3",
-    "-c",
-    f"import os; os.open('{CANARY_PATH}', os.O_RDONLY)",
-)
-
-
-# ---------------------------------------------------------------------------
-# Canary emission
-# ---------------------------------------------------------------------------
-
-
-def emit_canary_syscall(sink: ObserverSink) -> None:  # noqa: ARG001
-    """Run the canary harness subprocess synchronously.
-
-    The harness attempts ``open(CANARY_PATH, O_RDONLY)``.  The path does
-    not exist on disk so the call returns ENOENT, but strace captures the
-    ``openat()`` syscall.  ``StraceObserver.parse_event()`` recognises the
-    path and tags the event ``source="observer_canary"``.
-
-    **Must be called before the main observed child starts** so the parser
-    can confirm liveness before any package-under-test events arrive.
-    Runtime: ≈1ms (tiny Python startup + immediate exit on ENOENT).
-
-    ``sink`` is accepted for API consistency with the ``Observer`` contract;
-    this implementation does not write to it directly — strace captures the
-    syscall through its normal PGID trace.
-
-    Integration (Task 2.5): BirdcageBackend.run() calls this just before
-    ``asyncio.create_subprocess_exec(birdcage_argv)``.
-    """
-    subprocess.run(  # noqa: S603
-        _CANARY_ARGV,
-        check=False,  # ENOENT from os.open is expected
-        capture_output=True,
-    )
 
 
 # ---------------------------------------------------------------------------

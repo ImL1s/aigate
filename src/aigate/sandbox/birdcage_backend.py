@@ -374,22 +374,26 @@ class BirdcageBackend(SandboxBackend):
                             observer_events.append(ev)
                 except (BlockingIOError, OSError):
                     pass
+            finally:
                 # Flush any complete lines buffered in the observer parser.
                 # parse_event consumes ONE newline-terminated line per call;
-                # a single FIFO read can contain dozens of lines, of which
-                # only the first is consumed per chunk in the drain loop above.
-                # Without this flush, the tail ~95% of lines (often the
-                # postinstall exfil attempts) silently vanish (reviewer P1,
-                # PR #6 comment 3117030564). Hard cap 100_000 iterations
-                # in case a buggy parser never returns None (safety rail
-                # against infinite loop).
+                # a single FIFO read can contain dozens of lines. Without
+                # this flush, the tail ~95% of lines (often the postinstall
+                # exfil) silently vanish.
+                # MUST run in `finally` (not after drain) — on the common
+                # EOF-during-streaming path (strace exits before stop is
+                # set), the `while not stop.is_set()` loop breaks via
+                # `return` on `chunk == b""` BEFORE reaching the drain
+                # block, so putting the flush after drain misses that path
+                # entirely (reviewer P1, PR #6 comment 3117385261). Hard
+                # cap 100_000 iterations as a safety rail against a buggy
+                # parser that never returns None.
                 with contextlib.suppress(Exception):
                     for _ in range(100_000):
                         ev = observer.parse_event(b"", scrub)
                         if ev is None:
                             break
                         observer_events.append(ev)
-            finally:
                 if fd >= 0:
                     with contextlib.suppress(OSError):
                         os.close(fd)

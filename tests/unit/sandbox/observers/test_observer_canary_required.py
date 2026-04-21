@@ -9,20 +9,19 @@ Covers:
 - zero real events + 1 observer_canary → skipped_unexpected has NETWORK_CAPTURE
 - ≥1 real event + canary → observed has NETWORK_CAPTURE
 - all-synthetic events (resource_probe + canary) → skipped_unexpected
-- emit_canary_syscall: calls subprocess.run with the canary argv (mocked)
+- canary_wrap in BirdcageBackend._run_inside_scratch contains CANARY_PATH
+  and precedes birdcage_argv (replaces obsolete emit_canary_syscall tests
+  per reviewer P2 PR #6 comment 3117386064).
 - CANARY_PATH matches strace.OBSERVER_CANARY_MARKER (contract check)
 """
 
 from __future__ import annotations
-
-from unittest.mock import MagicMock, patch
 
 import pytest
 
 from aigate.sandbox.observers.canary import (
     CANARY_PATH,
     classify_network_capture_coverage,
-    emit_canary_syscall,
 )
 from aigate.sandbox.types import DynamicTraceEvent, SandboxCoverage
 
@@ -118,29 +117,46 @@ def test_coverage_sets_are_disjoint() -> None:
 
 
 # ---------------------------------------------------------------------------
-# emit_canary_syscall — subprocess call (mocked)
+# canary_wrap structural invariants — production path (replaces the obsolete
+# emit_canary_syscall tests per PR #6 P2 comment 3117386064).
 # ---------------------------------------------------------------------------
 
 
-def test_emit_canary_syscall_calls_subprocess_run() -> None:
-    """emit_canary_syscall must call subprocess.run with the canary argv."""
-    mock_sink = MagicMock()
-    with patch("aigate.sandbox.observers.canary.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(returncode=1)  # ENOENT is normal
-        emit_canary_syscall(mock_sink)
-    mock_run.assert_called_once()
-    argv = mock_run.call_args[0][0]
-    assert CANARY_PATH in " ".join(argv)
+def test_canary_wrap_contains_canary_path() -> None:
+    """The sh wrapper BirdcageBackend builds MUST reference CANARY_PATH.
+
+    Structural check on the literal string used in
+    ``BirdcageBackend._run_inside_scratch``.  Exercising the runtime argv
+    would require spinning up an asyncio subprocess; this test pins the
+    constant invariant instead.
+    """
+    from pathlib import Path
+
+    src = Path("src/aigate/sandbox/birdcage_backend.py").read_text()
+    # Wrapper literal must reference CANARY_PATH via f-string interpolation.
+    assert "cat {CANARY_PATH}" in src or f"cat {CANARY_PATH}" in src, (
+        "canary_wrap in birdcage_backend.py must open CANARY_PATH via `cat`"
+    )
 
 
-def test_emit_canary_syscall_uses_check_false() -> None:
-    """ENOENT is expected — subprocess.run must not raise on non-zero exit."""
-    mock_sink = MagicMock()
-    with patch("aigate.sandbox.observers.canary.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(returncode=1)
-        emit_canary_syscall(mock_sink)
-    _, kwargs = mock_run.call_args
-    assert kwargs.get("check") is False
+def test_canary_wrap_precedes_birdcage_argv() -> None:
+    """canary_wrap must appear before birdcage_argv in the composed argv.
+
+    Ordering matters: the canary syscall has to be the FIRST traced child
+    of strace so the parser sees it before any package syscalls (PR #6 P1
+    comment 3117029517).
+    """
+    from pathlib import Path
+
+    src = Path("src/aigate/sandbox/birdcage_backend.py").read_text()
+    # Sloppy but robust: find the assignment and assert canary_wrap is to
+    # the left of birdcage_argv in the slice.
+    idx = src.find("argv = observer.argv_prefix(sink) + canary_wrap + birdcage_argv")
+    assert idx >= 0, (
+        "BirdcageBackend argv composition must be "
+        "`observer.argv_prefix(sink) + canary_wrap + birdcage_argv` "
+        "(canary_wrap BEFORE birdcage_argv)"
+    )
 
 
 # ---------------------------------------------------------------------------
