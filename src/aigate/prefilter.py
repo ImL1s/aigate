@@ -8,6 +8,7 @@ import re
 from collections.abc import Sequence
 from difflib import SequenceMatcher
 
+from aigate.sandbox.evasion.aggregator import aggregate_signals as _aggregate_evasion
 from aigate.sandbox.evasion.registry import run_static as _run_evasion_static
 
 from .config import Config
@@ -300,11 +301,12 @@ def run_prefilter(
         )
         signals.extend(code_signals)
 
-    # 5.0 Evasion detector static pass (Phase 3 T9)
-    # Results are RiskSignal objects — kept separate so legacy str-only
-    # callers on ``risk_signals`` don't break; merged at PrefilterResult time.
+    # 5.0 Evasion detector static pass (Phase 3 T9 + T8 aggregator)
+    # Results are RiskSignal objects; aggregator collapses LOW/MEDIUM clusters
+    # per T8 rules. HIGH/CRITICAL always preserved individually.
     if source_files:
-        evasion_signals.extend(_run_evasion_static(source_files))
+        _raw = _run_evasion_static(source_files)
+        evasion_signals.extend(_aggregate_evasion(_raw))
 
     # 5.1 Ecosystem-specific compile-time-attack signals (Rust / crates)
     if source_files and package.ecosystem in ("crates", "cargo"):
