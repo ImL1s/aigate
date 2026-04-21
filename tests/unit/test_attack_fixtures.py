@@ -161,8 +161,7 @@ class TestTorchtritonDetection:
             _pkg("torchtriton", "2.0.0", ecosystem="pypi"), Config(), TORCHTRITON_FILES
         )
         assert any(
-            "urlopen" in str(s).lower() or "request" in str(s).lower()
-            for s in result.risk_signals
+            "urlopen" in str(s).lower() or "request" in str(s).lower() for s in result.risk_signals
         )
 
     def test_detects_setup_py_high_risk(self):

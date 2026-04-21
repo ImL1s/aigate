@@ -806,15 +806,17 @@ def _shannon_entropy(text: str) -> float:
 # Per plan REV-NI2, autonomous blocking requires ≥2 orthogonal HIGH tactics
 # (enforced by T14 multi-evasion gate in policy.py). Legacy _calculate_risk_level
 # would otherwise bypass the gate via the 1-HIGH→HIGH→MALICIOUS chain.
-_EVASION_CATEGORIES: frozenset[str] = frozenset({
-    "env_mutation",
-    "time_bomb",
-    "build_hooks",
-    "derived_exfil",
-    "direct_xpc",
-    "anti_debug",
-    "parser_partial_drift",
-})
+_EVASION_CATEGORIES: frozenset[str] = frozenset(
+    {
+        "env_mutation",
+        "time_bomb",
+        "build_hooks",
+        "derived_exfil",
+        "direct_xpc",
+        "anti_debug",
+        "parser_partial_drift",
+    }
+)
 
 
 def _is_evasion_signal(s: str | RiskSignal) -> bool:
@@ -851,8 +853,7 @@ def _calculate_risk_level(signals: Sequence[str | RiskSignal]) -> RiskLevel:
     high_count = sum(
         1
         for s in signals
-        if _signal_severity(s) in (RiskLevel.HIGH, RiskLevel.CRITICAL)
-        and not _is_evasion_signal(s)
+        if _signal_severity(s) in (RiskLevel.HIGH, RiskLevel.CRITICAL) and not _is_evasion_signal(s)
     )
 
     # Count unique MEDIUM patterns (extract pattern before 'in source:' / 'in install_script:')

@@ -26,8 +26,7 @@ def test_run_static_build_hooks_fires() -> None:
     """Package.json with postinstall script produces build_hooks signal."""
     source_files = {
         "package.json": (
-            '{"name":"evil","version":"1.0.0",'
-            '"scripts":{"postinstall":"node install.js"}}'
+            '{"name":"evil","version":"1.0.0","scripts":{"postinstall":"node install.js"}}'
         ),
     }
     signals = run_static(source_files)
@@ -39,8 +38,7 @@ def test_run_static_both_categories_present() -> None:
     """Source files with both env_mutation and build_hooks patterns fire both."""
     source_files = {
         "package.json": (
-            '{"name":"evil","version":"1.0.0",'
-            '"scripts":{"postinstall":"node install.js"}}'
+            '{"name":"evil","version":"1.0.0","scripts":{"postinstall":"node install.js"}}'
         ),
         "install.py": "import os\nos.environ['LD_PRELOAD'] = '/tmp/evil.so'\n",
     }
