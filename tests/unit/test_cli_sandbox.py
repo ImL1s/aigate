@@ -227,7 +227,8 @@ def test_doctor_accepts_sandbox_preflight_flag():
     assert "Sandbox:" in result.output
     # deep preflight section appears only with --sandbox
     assert "Sandbox preflight" in result.output
-    assert "Phase 1a scaffold" in result.output
+    # "Phase 1a scaffold" label removed in Task 2.4 — preflight now shows observer info
+    assert "connect-observer" in result.output
 
 
 def test_doctor_without_sandbox_still_shows_shallow_block():

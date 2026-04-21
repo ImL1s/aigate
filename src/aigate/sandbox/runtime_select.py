@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import platform
 import shutil
 from typing import TYPE_CHECKING
@@ -11,6 +12,7 @@ from .types import SandboxBackend, SandboxMode
 
 if TYPE_CHECKING:
     from .birdcage_backend import BirdcageBackend  # noqa: F401 — forward-decl, Task 2
+    from .observers.base import Observer  # type-hint only — avoid circular at load
 
 # REV-3 — Linux connect-observer probe order (first available wins)
 LINUX_CONNECT_OBSERVER_PROBE_ORDER: tuple[str, ...] = ("birdcage-native", "strace", "bpftrace")
@@ -29,6 +31,39 @@ def detect_linux_connect_observer() -> str | None:
             continue
         if shutil.which(name):
             return name
+    return None
+
+
+def select_linux_observer() -> Observer | None:
+    """Return the best-available Observer instance for Linux, or None.
+
+    Probe order mirrors ``LINUX_CONNECT_OBSERVER_PROBE_ORDER``:
+    strace (Phase 2) → bpftrace (Phase 2.5 stub) → birdcage-native (Phase 3+).
+
+    bpftrace and birdcage-native are out-of-scope for Phase 2 and always
+    return None here; they resolve to a real observer in Phase 2.5/3 without
+    any call-site change.
+
+    The strace import is deferred (``try/except ImportError``) so this module
+    is importable before Task 2.2 lands (StraceObserver lives in a separate
+    file that may not exist in earlier commits).
+    """
+    name = detect_linux_connect_observer()
+    if name == "strace":
+        try:
+            from .observers.strace import StraceObserver  # noqa: PLC0415
+        except ImportError:
+            logging.debug(
+                "select_linux_observer: StraceObserver not yet available (Task 2.2 pending)"
+            )
+            return None
+        return StraceObserver()
+    if name in ("bpftrace", "birdcage-native"):
+        # Phase 2.5/3+ scope — not wired in Phase 2
+        logging.debug(
+            "select_linux_observer: observer %r is Phase 2.5/3+ scope; returning None", name
+        )
+        return None
     return None
 
 

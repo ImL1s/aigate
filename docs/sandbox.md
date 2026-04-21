@@ -8,9 +8,12 @@ This document tracks the public contract for Phase 1. Implementation details,
 backend wiring, and strict-mode Docker escalation are covered in the PRD
 (`.omc/plans/aigate-sandbox-mode-prd.md` §3).
 
-> Status: **Phase 1b — npm light mode shipped.** The `--sandbox` flag routes
+> Status: **Phase 2 — observer layer shipped.** The `--sandbox` flag routes
 > npm packages through the Birdcage backend (macOS `sandbox-exec` + Linux
-> Landlock); other ecosystems and strict mode ship in later phases.
+> Landlock) with a strace-based observer on Linux (Phase 2). Linux-light now
+> produces evidence-based `NETWORK_CAPTURE`, `DNS`, `FS_WRITES`, and
+> `PROCESS_TREE` coverage instead of defaulting every run to
+> `NEEDS_HUMAN_REVIEW`. Other ecosystems and strict mode ship in later phases.
 
 ## Design principles
 
@@ -133,6 +136,38 @@ Rejected alternatives:
 - `tests/sandbox/test_prompt_injection_resistance.py` — `to_prompt_section()`
   escapes jailbreak tokens inside observed bytes.
 
+## Linux-light coverage matrix (Phase 2 — strace observer)
+
+Per-surface breakdown for `--sandbox` on Linux with the Phase 2 strace observer.
+Run `aigate doctor --sandbox` to verify observer availability on your host.
+
+| Surface | Linux-light (Phase 2) | Notes |
+|---|---|---|
+| `network_capture` | **observed** (strace `connect`) | Cooperative (npm `--offline`) + observed (strace). Not kernel-blocked pre-6.7. |
+| `fs_writes` | **observed** (strace `openat`, `write`) | All file opens and writes visible via strace FIFO stream. |
+| `process_tree` | **observed** (strace `clone`, `execve`) | Fork-exec chains recorded; orphan-clone detector fires `floor_violation(MEDIUM)`. |
+| `dns` | **observed** (strace `connect` port 53) | DNS-by-IP captured; DNS-by-name resolution not yet split out (Phase 4). |
+| `syscall_trace` | skipped (expected) | Birdcage is Landlock-only — no full syscall table trace. strace covers `connect`, `openat`, `write`, `execve`, `clone` only. |
+| `env_reads` | skipped (expected) | No uprobes without root; `getenv` uprobe is Phase 3. |
+| `build_time_hooks` | **observed** (exec events) | `postinstall`/`preinstall` exec chains captured via strace `execve`. |
+| `import_probe` | skipped (Phase 3) | Post-install probe commands not wired. |
+| `canary_absolute_path_writes` | **observed** | Linux bind-mounts / Landlock captures absolute-path writes. |
+
+**Known gaps on Linux-light:**
+
+- **DNS-by-name:** `connect()` to port 53 is recorded, but the domain name in the DNS query
+  payload is not extracted. Phase 4 (mitmproxy / dnsmasq sidecar) closes this.
+- **ENV_READS:** `getenv` uprobe requires root or `CAP_SYS_PTRACE`. Phase 3 adds DTrace/uprobe coverage.
+- **ptrace_scope=2:** On hardened hosts (Ubuntu 24.04 AMIs, Fedora Silverblue), `ptrace_scope=2`
+  prevents strace from attaching. `aigate doctor --sandbox` surfaces this; Phase 2.5 adds a
+  sudo-gated bpftrace fallback (REV-I).
+
+**REV-F evidence-based coverage (Phase 2):**
+The Linux `NETWORK_CAPTURE` verdict is now evidence-based (not assume-missing):
+`observed.add(NETWORK_CAPTURE)` iff ≥1 real observer event; else `skipped_unexpected.add(NETWORK_CAPTURE)`.
+The canary event (`source="observer_canary"`) proves parser liveness but is excluded from the
+real-event count (REV-B / `is_real_event()`).
+
 ## macOS coverage matrix
 
 Per-surface breakdown for `--sandbox` (Birdcage light mode) on macOS.
@@ -146,7 +181,7 @@ no network primitive, so network isolation is cooperative + observed only.
 | `fs_writes` | **kernel-enforced** (SBPL `file-write*` allowlist) | Only `$SCRATCH_HOME` and `/tmp` writable |
 | `process_tree` | skipped | No PID-namespace isolation; PID tracking is best-effort via resource_probe |
 | `dns` | **kernel-enforced** (subsumed by `deny network*`) | Same socket-layer block as network_capture |
-| `import_probe` | skipped (Phase 2) | Post-install probe commands not yet wired |
+| `import_probe` | skipped (Phase 3) | Post-install probe commands not yet wired |
 | `build_time_hooks` | **observed** (exec events) | `postinstall`/`preinstall` exec chain captured |
 | `env_reads` | skipped | No uprobes without SIP-disabled root; DTrace restricted |
 | `canary_absolute_path_writes` | skipped (known gap) | See §macOS absolute-path-write gap above |
