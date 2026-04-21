@@ -8,15 +8,14 @@ import re
 from collections.abc import Sequence
 from difflib import SequenceMatcher
 
-from aigate.sandbox.evasion.aggregator import aggregate_signals as _aggregate_evasion
-from aigate.sandbox.evasion.registry import run_static as _run_evasion_static
-
 from .config import Config
 from .models import PackageInfo, PrefilterResult, RiskLevel, RiskSignal
 from .rules.behavior_chains import detect_behavior_chains
 from .rules.compound import check_compound_signals
 from .rules.loader import Rule, load_rules
 from .rules.popular_packages import _read_cache
+from .sandbox.evasion.aggregator import aggregate_signals as _aggregate_evasion
+from .sandbox.evasion.registry import run_static as _run_evasion_static
 
 logger = logging.getLogger(__name__)
 

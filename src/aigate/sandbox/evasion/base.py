@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 from typing import ClassVar
 
 from ...models import RiskLevel, RiskSignal
-from ..types import DynamicTrace, DynamicTraceEvent  # noqa: F401 — re-exported for detector use
+from ..types import DynamicTrace
 
 
 class Detector(ABC):

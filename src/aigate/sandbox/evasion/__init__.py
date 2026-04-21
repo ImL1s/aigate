@@ -7,8 +7,8 @@ Re-exports the public API so callers can do::
 
 from __future__ import annotations
 
-from ...models import RiskLevel, RiskSignal  # noqa: F401
-from ..types import DynamicTrace, DynamicTraceEvent  # noqa: F401
+from ...models import RiskLevel, RiskSignal
+from ..types import DynamicTrace, DynamicTraceEvent
 from .base import Detector, categories_from_signals
 from .registry import all_detectors, run_dynamic, run_static
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ...models import RiskSignal
+from ..types import DynamicTrace
 from .anti_debug import AntiDebugDetector
 from .base import Detector
 from .build_hooks import BuildHooksDetector
@@ -25,17 +27,15 @@ def all_detectors() -> list[Detector]:
     ]
 
 
-def run_static(source_files: dict[str, str]) -> list:
+def run_static(source_files: dict[str, str]) -> list[RiskSignal]:
     """Run every detector's detect_static; concat results."""
-    from ...models import RiskSignal  # noqa: F401
-
-    signals = []
+    signals: list[RiskSignal] = []
     for det in all_detectors():
         signals.extend(det.detect_static(source_files))
     return signals
 
 
-def run_dynamic(trace) -> list[str]:
+def run_dynamic(trace: DynamicTrace) -> list[str]:
     """Run every detector's detect_dynamic; concat category emissions."""
     cats: list[str] = []
     for det in all_detectors():
