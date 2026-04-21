@@ -4,9 +4,16 @@ from __future__ import annotations
 
 import pytest
 
+from aigate.cache import set_cached
 from aigate.config import Config
 from aigate.hooks import pip_hook
-from aigate.models import EnrichmentResult, PackageInfo, PrefilterResult, RiskLevel
+from aigate.models import (
+    AnalysisReport,
+    EnrichmentResult,
+    PackageInfo,
+    PrefilterResult,
+    RiskLevel,
+)
 
 
 def test_pip_wrapper_bypasses_with_no_aigate(monkeypatch):
@@ -34,9 +41,10 @@ def test_pip_wrapper_bypasses_with_no_aigate(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_check_packages_passes_enrichment_into_consensus(monkeypatch):
+async def test_check_packages_passes_enrichment_into_consensus(monkeypatch, tmp_path):
     config = Config()
     config.enrichment.enabled = True
+    config.cache_dir = str(tmp_path)  # isolate from user's real ~/.aigate/cache
     package = PackageInfo(name="requests", version="2.31.0", ecosystem="pypi")
     seen: dict[str, object] = {}
 
@@ -87,3 +95,43 @@ async def test_check_packages_passes_enrichment_into_consensus(monkeypatch):
 
     assert blocked == []
     assert "External Intelligence" in str(seen["external_intelligence"])
+
+
+@pytest.mark.asyncio
+async def test_pip_hook_uses_cache_on_hit(monkeypatch, tmp_path):
+    """On cache hit, skip download/prefilter/consensus entirely."""
+    config = Config()
+    config.cache_dir = str(tmp_path)
+    monkeypatch.setattr("aigate.hooks.pip_hook.Config.load", lambda: config)
+
+    package = PackageInfo(name="requests", version="2.31.0", ecosystem="pypi")
+
+    async def fake_resolve_package(_: str, __: str | None, ___: str) -> PackageInfo:
+        return package
+
+    monkeypatch.setattr("aigate.hooks.pip_hook.resolve_package", fake_resolve_package)
+
+    # Seed a safe-verdict cache entry so decision_from_report yields "allow"
+    safe_report = AnalysisReport(
+        package=package,
+        prefilter=PrefilterResult(passed=True, reason="safe", risk_level=RiskLevel.NONE),
+    )
+    set_cached(package.name, package.version, "pypi", safe_report, str(tmp_path))
+
+    # Heavy-path functions must not be called on a cache hit
+    async def fail_download(*_args, **_kwargs):
+        pytest.fail("download_source must not be called on cache hit")
+
+    def fail_prefilter(*_args, **_kwargs):
+        pytest.fail("run_prefilter must not be called on cache hit")
+
+    async def fail_consensus(*_args, **_kwargs):
+        pytest.fail("run_consensus must not be called on cache hit")
+
+    monkeypatch.setattr("aigate.hooks.pip_hook.download_source", fail_download)
+    monkeypatch.setattr("aigate.hooks.pip_hook.run_prefilter", fail_prefilter)
+    monkeypatch.setattr("aigate.hooks.pip_hook.run_consensus", fail_consensus)
+
+    blocked = await pip_hook._check_packages([("requests", None)])
+
+    assert blocked == []

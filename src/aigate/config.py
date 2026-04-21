@@ -207,7 +207,9 @@ class Config:
     whitelist: list[str] = field(default_factory=list)
     blocklist: list[str] = field(default_factory=list)
     cache_dir: str = "~/.aigate/cache"
-    cache_ttl_hours: int = 168  # 7 days
+    # 72h matches npm's unpublish window: beyond that an attacker can
+    # publish -> get SAFE cached -> unpublish -> republish under same version.
+    cache_ttl_hours: int = 72
     max_analysis_level: str = "l2_deep"  # l1_quick, l2_deep, l3_expert
     output_format: str = "rich"  # rich, json, sarif
     ecosystems: list[str] = field(
@@ -316,7 +318,7 @@ def _parse_config(path: Path) -> Config:
         whitelist=raw.get("whitelist", []),
         blocklist=raw.get("blocklist", []),
         cache_dir=raw.get("cache_dir", "~/.aigate/cache"),
-        cache_ttl_hours=raw.get("cache_ttl_hours", 168),
+        cache_ttl_hours=raw.get("cache_ttl_hours", 72),
         max_analysis_level=raw.get("max_analysis_level", "l2_deep"),
         output_format=raw.get("output_format", "rich"),
         ecosystems=raw.get("ecosystems", ["pypi", "npm", "pub", "crates", "cocoapods", "jsr"]),

@@ -375,7 +375,7 @@ async def _download_jsr_source(
     if client:
         resp = await client.get(tarball_url)
     else:
-        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
             resp = await c.get(tarball_url)
     resp.raise_for_status()
     content = resp.content
@@ -456,7 +456,7 @@ async def _download_pypi_source(
     if not download_url:
         return {}
 
-    resp = await _get(download_url, timeout=120, follow_redirects=True)
+    resp = await _get(download_url, timeout=30, follow_redirects=True)
     resp.raise_for_status()
     content = resp.content
     if len(content) > MAX_ARCHIVE_SIZE:
@@ -485,7 +485,7 @@ async def _download_npm_source(
     if client:
         resp = await client.get(tarball_url)
     else:
-        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
             resp = await c.get(tarball_url)
     resp.raise_for_status()
     content = resp.content
@@ -515,7 +515,7 @@ async def _download_pub_source(
     if client:
         resp = await client.get(tarball_url)
     else:
-        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
             resp = await c.get(tarball_url)
     resp.raise_for_status()
     content = resp.content
@@ -557,7 +557,7 @@ async def _download_crates_source(
     if client:
         resp = await client.get(download_url)
     else:
-        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
             resp = await c.get(download_url)
     resp.raise_for_status()
     content = resp.content
@@ -760,7 +760,7 @@ async def _download_cocoapods_http(
     if client:
         resp = await client.get(http_url)
     else:
-        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
             resp = await c.get(http_url)
     resp.raise_for_status()
     content = resp.content
@@ -819,7 +819,7 @@ async def _fetch_github_tarball(
         if client:
             resp = await client.get(url, headers=headers, follow_redirects=True)
         else:
-            async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
                 resp = await c.get(url, headers=headers)
         resp.raise_for_status()
     except httpx.HTTPStatusError as exc:
@@ -1322,7 +1322,7 @@ async def download_from_local_pypi(
 
     logger.debug("Downloading archive: %s", download_url)
 
-    async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
         resp = await client.get(download_url)
         resp.raise_for_status()
         content = resp.content

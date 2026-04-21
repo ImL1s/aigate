@@ -82,8 +82,11 @@ ecosystems:
   - pub       # pub.dev (Dart/Flutter)
 
 # Cache settings
+# Default TTL matches npm's 72h unpublish window — beyond that an attacker
+# can publish → get cached SAFE → unpublish → republish under the same
+# version. Set AIGATE_NO_CACHE=1 in the env to bypass reads and writes.
 cache_dir: ~/.aigate/cache
-cache_ttl_hours: 168    # 7 days
+cache_ttl_hours: 72
 
 # Maximum AI analysis depth
 max_analysis_level: l2_deep  # l1_quick | l2_deep | l3_expert
