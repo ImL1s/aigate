@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import platform
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -13,8 +14,10 @@ from .models import (
     EnrichmentResult,
     PrefilterResult,
     RiskLevel,
+    RiskSignal,
     Verdict,
 )
+from .sandbox import evasion as _evasion_mod
 
 if TYPE_CHECKING:
     # Runtime import lives inside ``decision_from_dynamic_trace`` to avoid
@@ -37,15 +40,96 @@ class PolicyDecision:
     should_block_install: bool = False
 
 
+# ---------------------------------------------------------------------------
+# Multi-evasion gate helpers (Phase 3 T14)
+# ---------------------------------------------------------------------------
+
+_OUTCOME_ORDER: dict[PolicyOutcome, int] = {
+    PolicyOutcome.SAFE: 0,
+    PolicyOutcome.NEEDS_REVIEW: 1,
+    PolicyOutcome.MALICIOUS: 2,
+    PolicyOutcome.ERROR: 3,
+}
+
+_RISK_ORDER: dict[RiskLevel, int] = {
+    RiskLevel.NONE: 0,
+    RiskLevel.LOW: 1,
+    RiskLevel.MEDIUM: 2,
+    RiskLevel.HIGH: 3,
+    RiskLevel.CRITICAL: 4,
+}
+
+
+def max_verdict(a: PolicyOutcome, b: PolicyOutcome) -> PolicyOutcome:
+    """Return the higher-severity verdict in the ordering SAFE < NEEDS_REVIEW < MALICIOUS."""
+    return a if _OUTCOME_ORDER.get(a, 0) >= _OUTCOME_ORDER.get(b, 0) else b
+
+
+def _apply_multi_evasion_gate(
+    verdict: PolicyOutcome,
+    categories_dict: dict[str, RiskLevel],
+    dynamic_confirmed_categories: set[str],
+) -> PolicyOutcome:
+    """Apply the 5-step multi-evasion gate (Phase 3 T14).
+
+    Step 1: categories_dict is already built by the caller via MAX join.
+    Step 2: Darwin-XPC belt-and-braces — FIRST, before any count gate.
+    Step 3: MALICIOUS gate — ≥2 HIGH categories with ≥1 dynamic confirmation.
+    Step 4: NEEDS_REVIEW monotone-lift — ≥2 MEDIUM-or-above categories.
+    Step 5: unchanged.
+    """
+    # Step 2: Darwin-XPC standalone belt-and-braces — evaluated FIRST (REV-BS3).
+    # Fires when direct_xpc is the *only* evasion category on Darwin, even at
+    # MEDIUM severity, escalating a SAFE verdict to NEEDS_REVIEW.
+    if platform.system() == "Darwin" and set(categories_dict.keys()) == {"direct_xpc"}:
+        return max_verdict(verdict, PolicyOutcome.NEEDS_REVIEW)
+
+    # Step 3: MALICIOUS gate — ≥2 distinct HIGH categories + ≥1 dynamic confirmation.
+    # Deliberate tightening (REV-NI2 option a): 1 HIGH + N MEDIUM does NOT
+    # escalate to MALICIOUS; two orthogonal HIGH tactics are required.
+    high_cats = {
+        c
+        for c, sev in categories_dict.items()
+        if _RISK_ORDER.get(sev, 0) >= _RISK_ORDER[RiskLevel.HIGH]
+    }
+    if len(high_cats) >= 2 and len(high_cats & dynamic_confirmed_categories) >= 1:
+        return PolicyOutcome.MALICIOUS  # short-circuit; Step 4 never runs
+
+    # Step 4: NEEDS_REVIEW monotone-lift — ≥2 MEDIUM-or-above categories.
+    # Monotone: NEVER downgrades an already-MALICIOUS verdict (REV-NI1).
+    medium_or_above = {
+        c
+        for c, sev in categories_dict.items()
+        if _RISK_ORDER.get(sev, 0) >= _RISK_ORDER[RiskLevel.MEDIUM]
+    }
+    if len(medium_or_above) >= 2:
+        return max_verdict(verdict, PolicyOutcome.NEEDS_REVIEW)
+
+    # Step 5: unchanged.
+    return verdict
+
+
 def decision_from_prefilter(prefilter: PrefilterResult) -> PolicyDecision:
     if prefilter.risk_level in (RiskLevel.HIGH, RiskLevel.CRITICAL):
+        base_outcome = PolicyOutcome.MALICIOUS
+    elif prefilter.risk_level == RiskLevel.MEDIUM:
+        base_outcome = PolicyOutcome.NEEDS_REVIEW
+    else:
+        base_outcome = PolicyOutcome.SAFE
+
+    # Phase 3 T14: multi-evasion gate over structured RiskSignal attributes.
+    static_signals = [s for s in (prefilter.risk_signals or []) if isinstance(s, RiskSignal)]
+    categories_dict = _evasion_mod.categories_from_signals(static_signals, [])
+    outcome = _apply_multi_evasion_gate(base_outcome, categories_dict, set())
+
+    if outcome == PolicyOutcome.MALICIOUS:
         return PolicyDecision(
             outcome=PolicyOutcome.MALICIOUS,
             exit_code=2,
             reason=prefilter.reason,
             should_block_install=True,
         )
-    if prefilter.risk_level == RiskLevel.MEDIUM:
+    if outcome == PolicyOutcome.NEEDS_REVIEW:
         return PolicyDecision(
             outcome=PolicyOutcome.NEEDS_REVIEW,
             exit_code=1,
@@ -222,6 +306,31 @@ def decision_from_dynamic_trace(
             outcome=PolicyOutcome.NEEDS_REVIEW,
             exit_code=1,
             reason=reason,
+        )
+
+    # Phase 3 T14: multi-evasion gate (evaluated before severity scan).
+    # Build policy-local copy of signatures — never mutate trace.signatures.
+    _trace_static_signals = [
+        s for s in (getattr(trace, "risk_signals", []) or []) if isinstance(s, RiskSignal)
+    ]
+    _dynamic_cats: list[str] = list(getattr(trace, "dynamic_categories", []) or [])
+    _categories_dict = _evasion_mod.categories_from_signals(_trace_static_signals, _dynamic_cats)
+    _dynamic_confirmed: set[str] = set(_dynamic_cats)
+    _gate_outcome = _apply_multi_evasion_gate(
+        PolicyOutcome.SAFE, _categories_dict, _dynamic_confirmed
+    )
+    if _gate_outcome == PolicyOutcome.MALICIOUS:
+        return PolicyDecision(
+            outcome=PolicyOutcome.MALICIOUS,
+            exit_code=2,
+            reason="Multi-evasion gate: ≥2 HIGH evasion tactics with dynamic confirmation",
+            should_block_install=True,
+        )
+    if _gate_outcome == PolicyOutcome.NEEDS_REVIEW:
+        return PolicyDecision(
+            outcome=PolicyOutcome.NEEDS_REVIEW,
+            exit_code=1,
+            reason="Multi-evasion gate: ≥2 evasion tactics detected",
         )
 
     # Scan events + signatures for HIGH/CRITICAL signals.

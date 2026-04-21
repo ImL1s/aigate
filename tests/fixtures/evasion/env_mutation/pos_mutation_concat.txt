@@ -1,0 +1,5 @@
+# Concatenated key — simple regex cannot catch this; AST detector required.
+# This fixture documents the known limitation: "LD_" + "PRELOAD" is not
+# matched by the current regex-based detector.  When the AST-aware detector
+# lands, this fixture should be promoted to a positive assertion.
+os.environ["LD_" + "PRELOAD"] = "/evil"

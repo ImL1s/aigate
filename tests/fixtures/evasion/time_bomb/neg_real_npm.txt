@@ -1,0 +1,7 @@
+# Source: npm/node_modules/date-fns/src/isAfter/index.js (representative snippet)
+# Legitimate date comparison — both operands are runtime values, not future literals.
+function isAfter(dirtyDate, dirtyDateToCompare) {
+  var date = toDate(dirtyDate);
+  var compare = toDate(dirtyDateToCompare);
+  return date.getTime() > compare.getTime();
+}

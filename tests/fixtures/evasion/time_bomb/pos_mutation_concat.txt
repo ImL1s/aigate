@@ -1,0 +1,6 @@
+# PEP 515 underscore-separated integer literal.
+# Known limitation: current regex (\d{10,}) does NOT match 1_850_000_000
+# because \d does not match underscore separators.  Test is marked xfail
+# (xfail strict=False) to document this gap; upgrade regex when PEP 515
+# support is required.
+if time.time() > 1_850_000_000: evil()

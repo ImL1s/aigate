@@ -1,0 +1,2 @@
+home = os.environ.get('HOME', '/tmp')
+cache_dir = os.environ.get('XDG_CACHE_HOME', os.path.expanduser('~/.cache'))
