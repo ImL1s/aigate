@@ -37,6 +37,18 @@ def _cache_disabled() -> bool:
     return val in ("1", "true", "yes", "on")
 
 
+def _from_dict(cls, data: dict):
+    """Construct a dataclass, silently dropping unknown keys.
+
+    Tolerates schema drift: an older cache entry containing fields that the
+    current dataclass no longer defines must NOT crash report_from_cached, or
+    a TypeError would bubble up through the hook's broad except and silently
+    let the install proceed (fail-open on schema change).
+    """
+    fields = cls.__dataclass_fields__
+    return cls(**{k: v for k, v in data.items() if k in fields})
+
+
 def _cache_dir(config_cache_dir: str) -> Path:
     p = Path(config_cache_dir).expanduser()
     p.mkdir(parents=True, exist_ok=True)
@@ -212,7 +224,7 @@ def report_from_cached(
 
         provenance = None
         if enrichment_data.get("provenance"):
-            provenance = ProvenanceInfo(**enrichment_data["provenance"])
+            provenance = _from_dict(ProvenanceInfo, enrichment_data["provenance"])
 
         enrichment = EnrichmentResult(
             repository_url=enrichment_data.get("repository_url", ""),
@@ -222,12 +234,12 @@ def report_from_cached(
             expected_capabilities=enrichment_data.get("expected_capabilities", []),
             doc_snippets=enrichment_data.get("doc_snippets", []),
             security_mentions=[
-                SecurityMention(**mention)
+                _from_dict(SecurityMention, mention)
                 for mention in enrichment_data.get("security_mentions", [])
             ],
             author_info=enrichment_data.get("author_info", ""),
             known_vulnerabilities=[
-                KnownVulnerability(**vuln)
+                _from_dict(KnownVulnerability, vuln)
                 for vuln in enrichment_data.get("known_vulnerabilities", [])
             ],
             scorecard=scorecard,

@@ -268,3 +268,49 @@ async def test_npm_hook_uses_cache_on_hit(monkeypatch, tmp_path):
     blocked = await npm_hook._check_packages([("react", None)])
 
     assert blocked == []
+
+
+@pytest.mark.asyncio
+async def test_npm_hook_does_not_cache_error_verdict(monkeypatch, tmp_path):
+    """A transient AI ERROR must not get cached — otherwise one timeout
+    silently suppresses retry for the full TTL window."""
+    from aigate.cache import _cache_key
+    from aigate.models import ConsensusResult, Verdict
+
+    config = Config()
+    config.cache_dir = str(tmp_path)
+    config.enrichment.enabled = False
+    monkeypatch.setattr("aigate.hooks.npm_hook.Config.load", lambda: config)
+
+    package = PackageInfo(name="slow-pkg", version="1.0.0", ecosystem="npm")
+
+    async def fake_resolve_package(_: str, __: str | None, ___: str) -> PackageInfo:
+        return package
+
+    async def fake_download_source(_: PackageInfo) -> dict[str, str]:
+        return {"index.js": "console.log('hi')"}
+
+    def fake_run_prefilter(*_args, **_kwargs) -> PrefilterResult:
+        return PrefilterResult(
+            passed=False,
+            reason="needs review",
+            risk_level=RiskLevel.MEDIUM,
+            risk_signals=["s"],
+            needs_ai_review=True,
+        )
+
+    async def fake_run_consensus(**_kwargs: object) -> ConsensusResult:
+        return ConsensusResult(
+            final_verdict=Verdict.ERROR, confidence=0.0, summary="backend failed"
+        )
+
+    monkeypatch.setattr("aigate.hooks.npm_hook.resolve_package", fake_resolve_package)
+    monkeypatch.setattr("aigate.hooks.npm_hook.download_source", fake_download_source)
+    monkeypatch.setattr("aigate.hooks.npm_hook.run_prefilter", fake_run_prefilter)
+    monkeypatch.setattr("aigate.hooks.npm_hook.run_consensus", fake_run_consensus)
+
+    blocked = await npm_hook._check_packages([("slow-pkg", None)])
+
+    assert blocked == []
+    key = _cache_key("slow-pkg", "1.0.0", "npm")
+    assert not (tmp_path / f"{key}.json").exists()

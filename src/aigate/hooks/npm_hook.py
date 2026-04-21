@@ -128,8 +128,9 @@ async def _check_packages(packages: list[tuple[str, str | None]]) -> list[str]:
                     consensus=consensus,
                     enrichment=enrichment_result,
                 )
-                set_cached(package.name, package.version, "npm", report, config.cache_dir)
             decision = decision_from_report(report)
+            if not cached and decision.outcome != PolicyOutcome.ERROR:
+                set_cached(package.name, package.version, "npm", report, config.cache_dir)
             if decision.should_block_install:
                 blocked.append(name)
                 TerminalReporter(console).print_report(report)

@@ -167,3 +167,35 @@ class TestReportFromCached:
         assert rebuilt.package.name == "testpkg"
         assert rebuilt.prefilter.passed is True
         assert rebuilt.cached is True
+
+    def test_tolerates_unknown_enrichment_fields(self, tmp_path: Path):
+        """Schema drift: an older cache file with now-removed fields must not
+        raise TypeError in ProvenanceInfo/SecurityMention/KnownVulnerability
+        constructors, otherwise the hook's broad except swallows it and
+        installs silently fail-open."""
+        cached = {
+            "package": {"name": "p", "version": "1.0.0", "ecosystem": "pypi"},
+            "prefilter": {
+                "passed": True,
+                "reason": "safe",
+                "risk_level": "none",
+                "risk_signals": [],
+                "needs_ai_review": False,
+            },
+            "enrichment": {
+                "provenance": {"source": "x", "future_field_removed_in_v2": "boom"},
+                "security_mentions": [
+                    {"title": "t", "url": "", "snippet": "s", "legacy_unknown": 1}
+                ],
+                "known_vulnerabilities": [
+                    {"id": "X", "summary": "s", "dropped_in_newer_schema": True}
+                ],
+            },
+        }
+        fallback = PackageInfo(name="p", version="1.0.0", ecosystem="pypi")
+        rebuilt = report_from_cached(cached, fallback_package=fallback, total_latency_ms=0)
+        assert rebuilt.enrichment is not None
+        assert rebuilt.enrichment.provenance is not None
+        assert rebuilt.enrichment.provenance.source == "x"
+        assert len(rebuilt.enrichment.security_mentions) == 1
+        assert len(rebuilt.enrichment.known_vulnerabilities) == 1
