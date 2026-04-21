@@ -4,7 +4,9 @@ import json
 import time
 from pathlib import Path
 
-from aigate.cache import _cache_key, get_cached, set_cached
+import pytest
+
+from aigate.cache import _cache_key, get_cached, report_from_cached, set_cached
 from aigate.models import (
     AnalysisReport,
     PackageInfo,
@@ -115,3 +117,113 @@ class TestSetAndGet:
         set_cached("pkg", "1.0", "pypi", report, str(tmp_path), provenance="local")
         result = get_cached("pkg", "1.0", "pypi", str(tmp_path), ttl_hours=1, provenance="local")
         assert result is not None
+
+
+class TestAigateNoCacheEnv:
+    """AIGATE_NO_CACHE env kill-switch must short-circuit both read and write."""
+
+    @pytest.mark.parametrize("truthy", ["1", "true", "True", "YES", "on"])
+    def test_get_cached_returns_none_when_disabled(self, tmp_path: Path, monkeypatch, truthy: str):
+        report = _make_report()
+        # Seed cache with env unset so the file actually exists.
+        monkeypatch.delenv("AIGATE_NO_CACHE", raising=False)
+        set_cached("pkg", "1.0", "pypi", report, str(tmp_path))
+        # Now set env and confirm read returns None despite the file.
+        monkeypatch.setenv("AIGATE_NO_CACHE", truthy)
+        result = get_cached("pkg", "1.0", "pypi", str(tmp_path), ttl_hours=1)
+        assert result is None
+
+    def test_set_cached_is_noop_when_disabled(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("AIGATE_NO_CACHE", "1")
+        report = _make_report()
+        set_cached("pkg", "1.0", "pypi", report, str(tmp_path))
+        # Directory may have been created lazily by get_cached; what matters is
+        # that no cache file was persisted for this key.
+        key = _cache_key("pkg", "1.0", "pypi")
+        assert not (tmp_path / f"{key}.json").exists()
+
+    @pytest.mark.parametrize("falsy", ["0", "false", "", "no", "off"])
+    def test_falsy_values_do_not_disable_cache(self, tmp_path: Path, monkeypatch, falsy: str):
+        monkeypatch.setenv("AIGATE_NO_CACHE", falsy)
+        report = _make_report()
+        set_cached("pkg", "1.0", "pypi", report, str(tmp_path))
+        result = get_cached("pkg", "1.0", "pypi", str(tmp_path), ttl_hours=1)
+        assert result is not None
+
+
+class TestReportFromCached:
+    """report_from_cached reconstructs an AnalysisReport from a roundtripped dict."""
+
+    def test_roundtrip_preserves_prefilter(self, tmp_path: Path):
+        report = _make_report()
+        set_cached("testpkg", "1.0.0", "pypi", report, str(tmp_path))
+        cached = get_cached("testpkg", "1.0.0", "pypi", str(tmp_path), ttl_hours=1)
+        assert cached is not None
+        rebuilt = report_from_cached(
+            cached,
+            fallback_package=report.package,
+            total_latency_ms=0,
+        )
+        assert rebuilt.package.name == "testpkg"
+        assert rebuilt.prefilter.passed is True
+        assert rebuilt.cached is True
+
+    def test_tolerates_missing_required_fields(self, tmp_path: Path):
+        """Schema drift (opposite direction): if an older cache entry LACKS a
+        field the current dataclass now requires, _from_dict must return None
+        (and the list-comprehension filter must drop it) rather than raising
+        TypeError through the hook's broad except → silent fail-open."""
+        cached = {
+            "package": {"name": "p", "version": "1.0.0", "ecosystem": "pypi"},
+            "prefilter": {
+                "passed": True,
+                "reason": "safe",
+                "risk_level": "none",
+                "risk_signals": [],
+                "needs_ai_review": False,
+            },
+            "enrichment": {
+                # SecurityMention normally requires 'title'; omit it.
+                "security_mentions": [{"url": "http://x", "snippet": "s"}],
+                # KnownVulnerability normally requires 'id' + 'summary'; omit summary.
+                "known_vulnerabilities": [{"id": "CVE-1"}],
+            },
+        }
+        fallback = PackageInfo(name="p", version="1.0.0", ecosystem="pypi")
+        rebuilt = report_from_cached(cached, fallback_package=fallback, total_latency_ms=0)
+        # Incompatible entries are dropped, leaving empty lists — no exception.
+        assert rebuilt.enrichment is not None
+        assert rebuilt.enrichment.security_mentions == []
+        assert rebuilt.enrichment.known_vulnerabilities == []
+
+    def test_tolerates_unknown_enrichment_fields(self, tmp_path: Path):
+        """Schema drift: an older cache file with now-removed fields must not
+        raise TypeError in ProvenanceInfo/SecurityMention/KnownVulnerability
+        constructors, otherwise the hook's broad except swallows it and
+        installs silently fail-open."""
+        cached = {
+            "package": {"name": "p", "version": "1.0.0", "ecosystem": "pypi"},
+            "prefilter": {
+                "passed": True,
+                "reason": "safe",
+                "risk_level": "none",
+                "risk_signals": [],
+                "needs_ai_review": False,
+            },
+            "enrichment": {
+                "provenance": {"source": "x", "future_field_removed_in_v2": "boom"},
+                "security_mentions": [
+                    {"title": "t", "url": "", "snippet": "s", "legacy_unknown": 1}
+                ],
+                "known_vulnerabilities": [
+                    {"id": "X", "summary": "s", "dropped_in_newer_schema": True}
+                ],
+            },
+        }
+        fallback = PackageInfo(name="p", version="1.0.0", ecosystem="pypi")
+        rebuilt = report_from_cached(cached, fallback_package=fallback, total_latency_ms=0)
+        assert rebuilt.enrichment is not None
+        assert rebuilt.enrichment.provenance is not None
+        assert rebuilt.enrichment.provenance.source == "x"
+        assert len(rebuilt.enrichment.security_mentions) == 1
+        assert len(rebuilt.enrichment.known_vulnerabilities) == 1

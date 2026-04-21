@@ -13,24 +13,16 @@ import httpx
 from rich.console import Console
 
 from . import __version__
-from .cache import get_cached, set_cached
+from .cache import get_cached, report_from_cached, set_cached
 from .config import Config, SandboxConfig
 from .consensus import run_consensus
 from .models import (
     AnalysisLevel,
     AnalysisReport,
-    ConsensusResult,
     EnrichmentResult,
-    KnownVulnerability,
-    ModelResult,
     PackageInfo,
     PrefilterResult,
-    ProvenanceInfo,
     RiskLevel,
-    ScorecardCheck,
-    ScorecardResult,
-    SecurityMention,
-    Verdict,
 )
 from .policy import (
     PolicyOutcome,
@@ -463,9 +455,7 @@ async def _check(
                         "download path. Re-run without --skip-ai (or invalidate the "
                         "cache) to emit.[/yellow]"
                     )
-            report = _report_from_cached(
-                cached, fallback_package=package, total_latency_ms=total_ms
-            )
+            report = report_from_cached(cached, fallback_package=package, total_latency_ms=total_ms)
             _print_report_and_exit(report, use_json, use_sarif)
 
         # 2. Download source
@@ -2221,127 +2211,6 @@ def _print_report_and_exit(
         reporter = TerminalReporter(console, quiet=quiet)
     reporter.print_report(report)
     sys.exit(decision_from_report(report).exit_code)
-
-
-def _report_from_cached(
-    cached: dict,
-    *,
-    fallback_package: PackageInfo,
-    total_latency_ms: int,
-) -> AnalysisReport:
-    package_data = cached.get("package") or {}
-    package = PackageInfo(
-        name=package_data.get("name", fallback_package.name),
-        version=package_data.get("version", fallback_package.version),
-        ecosystem=package_data.get("ecosystem", fallback_package.ecosystem),
-        author=package_data.get("author", fallback_package.author),
-        description=package_data.get("description", fallback_package.description),
-        download_count=package_data.get("download_count", fallback_package.download_count),
-        publish_date=package_data.get("publish_date", fallback_package.publish_date),
-        homepage=package_data.get("homepage", fallback_package.homepage),
-        repository=package_data.get("repository", fallback_package.repository),
-        has_install_scripts=package_data.get(
-            "has_install_scripts",
-            fallback_package.has_install_scripts,
-        ),
-        dependencies=package_data.get("dependencies", fallback_package.dependencies),
-        metadata=package_data.get("metadata", fallback_package.metadata),
-    )
-
-    prefilter_data = cached.get("prefilter") or {}
-    prefilter = PrefilterResult(
-        passed=prefilter_data.get("passed", True),
-        reason=prefilter_data.get("reason", "cached"),
-        risk_signals=prefilter_data.get("risk_signals", []),
-        risk_level=RiskLevel(prefilter_data.get("risk_level", "none")),
-        needs_ai_review=prefilter_data.get("needs_ai_review", False),
-        source_unavailable=prefilter_data.get("source_unavailable", False),
-    )
-
-    consensus = None
-    consensus_data = cached.get("consensus")
-    if consensus_data:
-        consensus = ConsensusResult(
-            final_verdict=Verdict(consensus_data.get("final_verdict", "error")),
-            confidence=float(consensus_data.get("confidence", 0.0)),
-            model_results=[
-                ModelResult(
-                    model_name=model.get("model_name", ""),
-                    verdict=Verdict(model.get("verdict", "error")),
-                    confidence=float(model.get("confidence", 0.0)),
-                    reasoning=model.get("reasoning", ""),
-                    risk_signals=model.get("risk_signals", []),
-                    analysis_level=AnalysisLevel(model.get("analysis_level", "l1_quick")),
-                    token_usage=int(model.get("token_usage", 0)),
-                    latency_ms=int(model.get("latency_ms", 0)),
-                    raw_response=model.get("raw_response", ""),
-                )
-                for model in consensus_data.get("model_results", [])
-            ],
-            has_disagreement=consensus_data.get("has_disagreement", False),
-            summary=consensus_data.get("summary", ""),
-            risk_signals=consensus_data.get("risk_signals", []),
-            recommendation=consensus_data.get("recommendation", ""),
-        )
-
-    enrichment = None
-    enrichment_data = cached.get("enrichment")
-    if enrichment_data:
-        scorecard = None
-        if enrichment_data.get("scorecard"):
-            scorecard_data = enrichment_data["scorecard"]
-            scorecard = ScorecardResult(
-                repository_url=scorecard_data.get("repository_url", ""),
-                date=scorecard_data.get("date", ""),
-                score=float(scorecard_data.get("score", 0.0)),
-                critical_findings=scorecard_data.get("critical_findings", []),
-                checks=[
-                    ScorecardCheck(
-                        name=check.get("name", ""),
-                        score=float(check.get("score", 0.0)),
-                        reason=check.get("reason", ""),
-                        documentation_url=check.get("documentation_url", ""),
-                    )
-                    for check in scorecard_data.get("checks", [])
-                ],
-            )
-
-        provenance = None
-        if enrichment_data.get("provenance"):
-            provenance = ProvenanceInfo(**enrichment_data["provenance"])
-
-        enrichment = EnrichmentResult(
-            repository_url=enrichment_data.get("repository_url", ""),
-            project_status=enrichment_data.get("project_status", ""),
-            advisory_ids=enrichment_data.get("advisory_ids", []),
-            library_description=enrichment_data.get("library_description", ""),
-            expected_capabilities=enrichment_data.get("expected_capabilities", []),
-            doc_snippets=enrichment_data.get("doc_snippets", []),
-            security_mentions=[
-                SecurityMention(**mention)
-                for mention in enrichment_data.get("security_mentions", [])
-            ],
-            author_info=enrichment_data.get("author_info", ""),
-            known_vulnerabilities=[
-                KnownVulnerability(**vuln)
-                for vuln in enrichment_data.get("known_vulnerabilities", [])
-            ],
-            scorecard=scorecard,
-            provenance=provenance,
-            sources_queried=enrichment_data.get("sources_queried", []),
-            cache_hit=enrichment_data.get("cache_hit", False),
-            enrichment_latency_ms=int(enrichment_data.get("enrichment_latency_ms", 0)),
-            errors=enrichment_data.get("errors", []),
-        )
-
-    return AnalysisReport(
-        package=package,
-        prefilter=prefilter,
-        consensus=consensus,
-        enrichment=enrichment,
-        cached=True,
-        total_latency_ms=int(cached.get("total_latency_ms", total_latency_ms)),
-    )
 
 
 if __name__ == "__main__":

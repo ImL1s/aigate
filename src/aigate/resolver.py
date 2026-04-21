@@ -52,6 +52,39 @@ MAX_ARCHIVE_SIZE = 50 * 1024 * 1024  # 50MB — reject larger archives to preven
 MAX_CRATES_ARCHIVE_SIZE = 200 * 1024 * 1024  # 200MB
 
 
+# Archive-download timeout. Defaulting to 30s closes the fail-open window where
+# a hostile registry stalls writes to force users to disable the gate. Legit
+# users on slow links or pulling large ML wheels (torch/tensorflow 400MB+) can
+# raise the ceiling via AIGATE_DOWNLOAD_TIMEOUT_SECONDS without recompiling.
+# Registry-metadata calls are NOT affected — they use the 30s literal.
+_DEFAULT_ARCHIVE_TIMEOUT = 30
+# Hard ceiling on archive-download timeout. Without this an attacker who can
+# set env (e.g. compromised CI config) could set the override to 999999 and
+# reopen the 120s-stall DoS window this PR was closing. 300s is enough for
+# legitimate multi-hundred-MB ML wheels on slow links.
+_MAX_ARCHIVE_TIMEOUT = 300
+
+
+def _archive_timeout() -> int:
+    """Effective archive-download timeout in seconds.
+
+    Reads ``AIGATE_DOWNLOAD_TIMEOUT_SECONDS`` each call so tests (and env
+    changes at the container/CI layer) take effect without process restart.
+    Falls back to the 30s default on unset, non-int, or <1 values. Clamps
+    user overrides at _MAX_ARCHIVE_TIMEOUT to preserve the stall-DoS ceiling.
+    """
+    raw = os.environ.get("AIGATE_DOWNLOAD_TIMEOUT_SECONDS")
+    if not raw:
+        return _DEFAULT_ARCHIVE_TIMEOUT
+    try:
+        val = int(raw)
+    except ValueError:
+        return _DEFAULT_ARCHIVE_TIMEOUT
+    if val < 1:
+        return _DEFAULT_ARCHIVE_TIMEOUT
+    return min(val, _MAX_ARCHIVE_TIMEOUT)
+
+
 def _jsr_to_npm_name(name: str) -> str:
     """Rewrite a JSR package name (``@scope/pkg``) to its npm-compat form.
 
@@ -375,7 +408,7 @@ async def _download_jsr_source(
     if client:
         resp = await client.get(tarball_url)
     else:
-        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
+        async with httpx.AsyncClient(timeout=_archive_timeout(), follow_redirects=True) as c:
             resp = await c.get(tarball_url)
     resp.raise_for_status()
     content = resp.content
@@ -456,7 +489,7 @@ async def _download_pypi_source(
     if not download_url:
         return {}
 
-    resp = await _get(download_url, timeout=120, follow_redirects=True)
+    resp = await _get(download_url, timeout=_archive_timeout(), follow_redirects=True)
     resp.raise_for_status()
     content = resp.content
     if len(content) > MAX_ARCHIVE_SIZE:
@@ -485,7 +518,7 @@ async def _download_npm_source(
     if client:
         resp = await client.get(tarball_url)
     else:
-        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
+        async with httpx.AsyncClient(timeout=_archive_timeout(), follow_redirects=True) as c:
             resp = await c.get(tarball_url)
     resp.raise_for_status()
     content = resp.content
@@ -515,7 +548,7 @@ async def _download_pub_source(
     if client:
         resp = await client.get(tarball_url)
     else:
-        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
+        async with httpx.AsyncClient(timeout=_archive_timeout(), follow_redirects=True) as c:
             resp = await c.get(tarball_url)
     resp.raise_for_status()
     content = resp.content
@@ -557,7 +590,7 @@ async def _download_crates_source(
     if client:
         resp = await client.get(download_url)
     else:
-        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
+        async with httpx.AsyncClient(timeout=_archive_timeout(), follow_redirects=True) as c:
             resp = await c.get(download_url)
     resp.raise_for_status()
     content = resp.content
@@ -760,7 +793,7 @@ async def _download_cocoapods_http(
     if client:
         resp = await client.get(http_url)
     else:
-        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
+        async with httpx.AsyncClient(timeout=_archive_timeout(), follow_redirects=True) as c:
             resp = await c.get(http_url)
     resp.raise_for_status()
     content = resp.content
@@ -819,7 +852,7 @@ async def _fetch_github_tarball(
         if client:
             resp = await client.get(url, headers=headers, follow_redirects=True)
         else:
-            async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
+            async with httpx.AsyncClient(timeout=_archive_timeout(), follow_redirects=True) as c:
                 resp = await c.get(url, headers=headers)
         resp.raise_for_status()
     except httpx.HTTPStatusError as exc:
@@ -1322,7 +1355,7 @@ async def download_from_local_pypi(
 
     logger.debug("Downloading archive: %s", download_url)
 
-    async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=_archive_timeout(), follow_redirects=True) as client:
         resp = await client.get(download_url)
         resp.raise_for_status()
         content = resp.content

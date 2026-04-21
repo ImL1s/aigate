@@ -9,6 +9,7 @@ import sys
 
 from rich.console import Console
 
+from ..cache import get_cached, report_from_cached, set_cached
 from ..config import Config
 from ..consensus import run_consensus
 from ..enrichment import run_enrichment
@@ -65,36 +66,50 @@ async def _check_packages(packages: list[tuple[str, str | None]]) -> list[str]:
     for name, version in packages:
         try:
             package = await resolve_package(name, version, "pypi")
-            source_files = await download_source(package)
-            prefilter = run_prefilter(package, config, source_files)
-            consensus = None
-            enrichment_result = None
-            if prefilter.needs_ai_review:
-                if config.enrichment.enabled:
-                    try:
-                        enrichment_result = await run_enrichment(package, config.enrichment)
-                    except Exception as e:
-                        enrichment_result = EnrichmentResult(errors=[f"enrichment: {e}"])
-
-                source_text = "\n".join(f"### {p}\n```\n{c}\n```" for p, c in source_files.items())
-                consensus = await run_consensus(
-                    package=package,
-                    risk_signals=prefilter.risk_signals,
-                    source_code=source_text,
-                    config=config,
-                    level=AnalysisLevel.L1_QUICK,
-                    external_intelligence=(
-                        enrichment_result.to_prompt_section() if enrichment_result else ""
-                    ),
-                )
-
-            report = AnalysisReport(
-                package=package,
-                prefilter=prefilter,
-                consensus=consensus,
-                enrichment=enrichment_result,
+            cached = get_cached(
+                package.name,
+                package.version,
+                "pypi",
+                config.cache_dir,
+                config.cache_ttl_hours,
             )
+            if cached:
+                report = report_from_cached(cached, fallback_package=package, total_latency_ms=0)
+            else:
+                source_files = await download_source(package)
+                prefilter = run_prefilter(package, config, source_files)
+                consensus = None
+                enrichment_result = None
+                if prefilter.needs_ai_review:
+                    if config.enrichment.enabled:
+                        try:
+                            enrichment_result = await run_enrichment(package, config.enrichment)
+                        except Exception as e:
+                            enrichment_result = EnrichmentResult(errors=[f"enrichment: {e}"])
+
+                    source_text = "\n".join(
+                        f"### {p}\n```\n{c}\n```" for p, c in source_files.items()
+                    )
+                    consensus = await run_consensus(
+                        package=package,
+                        risk_signals=prefilter.risk_signals,
+                        source_code=source_text,
+                        config=config,
+                        level=AnalysisLevel.L1_QUICK,
+                        external_intelligence=(
+                            enrichment_result.to_prompt_section() if enrichment_result else ""
+                        ),
+                    )
+
+                report = AnalysisReport(
+                    package=package,
+                    prefilter=prefilter,
+                    consensus=consensus,
+                    enrichment=enrichment_result,
+                )
             decision = decision_from_report(report)
+            if not cached and decision.outcome != PolicyOutcome.ERROR:
+                set_cached(package.name, package.version, "pypi", report, config.cache_dir)
             if decision.should_block_install:
                 blocked.append(name)
                 TerminalReporter(console).print_report(report)

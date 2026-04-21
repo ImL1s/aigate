@@ -4,10 +4,19 @@ from __future__ import annotations
 
 import pytest
 
+from aigate.cache import _cache_key, set_cached
 from aigate.config import Config
 from aigate.hooks import npm_hook
 from aigate.hooks.npm_hook import _extract_packages, _install_commands_for, _parse_npm_spec
-from aigate.models import EnrichmentResult, PackageInfo, PrefilterResult, RiskLevel
+from aigate.models import (
+    AnalysisReport,
+    ConsensusResult,
+    EnrichmentResult,
+    PackageInfo,
+    PrefilterResult,
+    RiskLevel,
+    Verdict,
+)
 
 
 class TestParseNpmSpec:
@@ -169,9 +178,10 @@ def test_npm_wrapper_bypasses_with_no_aigate(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_npm_check_packages_passes_enrichment_into_consensus(monkeypatch):
+async def test_npm_check_packages_passes_enrichment_into_consensus(monkeypatch, tmp_path):
     config = Config()
     config.enrichment.enabled = True
+    config.cache_dir = str(tmp_path)  # isolate from user's real ~/.aigate/cache
     package = PackageInfo(name="react", version="18.0.0", ecosystem="npm")
     seen: dict[str, object] = {}
 
@@ -222,3 +232,84 @@ async def test_npm_check_packages_passes_enrichment_into_consensus(monkeypatch):
 
     assert blocked == []
     assert "External Intelligence" in str(seen["external_intelligence"])
+
+
+@pytest.mark.asyncio
+async def test_npm_hook_uses_cache_on_hit(monkeypatch, tmp_path):
+    """On cache hit, skip download/prefilter/consensus entirely."""
+    config = Config()
+    config.cache_dir = str(tmp_path)
+    monkeypatch.setattr("aigate.hooks.npm_hook.Config.load", lambda: config)
+
+    package = PackageInfo(name="react", version="18.2.0", ecosystem="npm")
+
+    async def fake_resolve_package(_: str, __: str | None, ___: str) -> PackageInfo:
+        return package
+
+    monkeypatch.setattr("aigate.hooks.npm_hook.resolve_package", fake_resolve_package)
+
+    safe_report = AnalysisReport(
+        package=package,
+        prefilter=PrefilterResult(passed=True, reason="safe", risk_level=RiskLevel.NONE),
+    )
+    set_cached(package.name, package.version, "npm", safe_report, str(tmp_path))
+
+    async def fail_download(*_args, **_kwargs):
+        pytest.fail("download_source must not be called on cache hit")
+
+    def fail_prefilter(*_args, **_kwargs):
+        pytest.fail("run_prefilter must not be called on cache hit")
+
+    async def fail_consensus(*_args, **_kwargs):
+        pytest.fail("run_consensus must not be called on cache hit")
+
+    monkeypatch.setattr("aigate.hooks.npm_hook.download_source", fail_download)
+    monkeypatch.setattr("aigate.hooks.npm_hook.run_prefilter", fail_prefilter)
+    monkeypatch.setattr("aigate.hooks.npm_hook.run_consensus", fail_consensus)
+
+    blocked = await npm_hook._check_packages([("react", None)])
+
+    assert blocked == []
+
+
+@pytest.mark.asyncio
+async def test_npm_hook_does_not_cache_error_verdict(monkeypatch, tmp_path):
+    """A transient AI ERROR must not get cached — otherwise one timeout
+    silently suppresses retry for the full TTL window."""
+    config = Config()
+    config.cache_dir = str(tmp_path)
+    config.enrichment.enabled = False
+    monkeypatch.setattr("aigate.hooks.npm_hook.Config.load", lambda: config)
+
+    package = PackageInfo(name="slow-pkg", version="1.0.0", ecosystem="npm")
+
+    async def fake_resolve_package(_: str, __: str | None, ___: str) -> PackageInfo:
+        return package
+
+    async def fake_download_source(_: PackageInfo) -> dict[str, str]:
+        return {"index.js": "console.log('hi')"}
+
+    def fake_run_prefilter(*_args, **_kwargs) -> PrefilterResult:
+        return PrefilterResult(
+            passed=False,
+            reason="needs review",
+            risk_level=RiskLevel.MEDIUM,
+            risk_signals=["s"],
+            needs_ai_review=True,
+        )
+
+    async def fake_run_consensus(**_kwargs: object) -> ConsensusResult:
+        return ConsensusResult(
+            final_verdict=Verdict.ERROR, confidence=0.0, summary="backend failed"
+        )
+
+    monkeypatch.setattr("aigate.hooks.npm_hook.resolve_package", fake_resolve_package)
+    monkeypatch.setattr("aigate.hooks.npm_hook.download_source", fake_download_source)
+    monkeypatch.setattr("aigate.hooks.npm_hook.run_prefilter", fake_run_prefilter)
+    monkeypatch.setattr("aigate.hooks.npm_hook.run_consensus", fake_run_consensus)
+
+    blocked = await npm_hook._check_packages([("slow-pkg", None)])
+
+    assert blocked == []
+    key = _cache_key("slow-pkg", "1.0.0", "npm")
+    assert not (tmp_path / f"{key}.json").exists()
