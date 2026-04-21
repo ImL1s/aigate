@@ -1,0 +1,18 @@
+# Source: lodash/package.json@4.17.21 (sha256:b3d9f9b8e7c8a0c5d1e3f2a4b6c8d9e1)
+{
+  "name": "lodash",
+  "version": "4.17.21",
+  "description": "Lodash modular utilities.",
+  "keywords": ["modules", "stdlib", "util"],
+  "homepage": "https://lodash.com/",
+  "license": "MIT",
+  "main": "lodash.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lodash/lodash.git"
+  },
+  "scripts": {
+    "build": "node build.js",
+    "test": "echo \"See https://travis-ci.org/lodash/lodash\" && exit 0"
+  }
+}

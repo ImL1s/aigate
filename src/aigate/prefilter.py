@@ -8,6 +8,8 @@ import re
 from collections.abc import Sequence
 from difflib import SequenceMatcher
 
+from aigate.sandbox.evasion.registry import run_static as _run_evasion_static
+
 from .config import Config
 from .models import PackageInfo, PrefilterResult, RiskLevel, RiskSignal
 from .rules.behavior_chains import detect_behavior_chains
@@ -261,6 +263,7 @@ def run_prefilter(
 ) -> PrefilterResult:
     """Run all pre-filter checks. Returns whether AI review is needed."""
     signals: list[str] = []
+    evasion_signals: list[RiskSignal] = []  # Phase 3 T9: structured RiskSignal objects
 
     # 1. Blocklist check
     if package.name in config.blocklist:
@@ -296,6 +299,12 @@ def run_prefilter(
             config=config,
         )
         signals.extend(code_signals)
+
+    # 5.0 Evasion detector static pass (Phase 3 T9)
+    # Results are RiskSignal objects — kept separate so legacy str-only
+    # callers on ``risk_signals`` don't break; merged at PrefilterResult time.
+    if source_files:
+        evasion_signals.extend(_run_evasion_static(source_files))
 
     # 5.1 Ecosystem-specific compile-time-attack signals (Rust / crates)
     if source_files and package.ecosystem in ("crates", "cargo"):
@@ -335,11 +344,15 @@ def run_prefilter(
         entropy_signals = check_high_entropy(source_files)
         signals.extend(entropy_signals)
 
-    # Determine risk level and whether AI review is needed
-    risk_level = _calculate_risk_level(signals)
+    # Determine risk level and whether AI review is needed.
+    # Convert evasion RiskSignal objects to str for legacy str-only callers;
+    # _calculate_risk_level accepts Sequence[str | RiskSignal] — pass combined.
+    evasion_as_str: list[str] = [str(sig) for sig in evasion_signals]
+    all_signals: list[str | RiskSignal] = [*signals, *evasion_as_str]
+    risk_level = _calculate_risk_level(all_signals)
     needs_ai = risk_level in (RiskLevel.MEDIUM, RiskLevel.HIGH, RiskLevel.CRITICAL)
 
-    if not signals:
+    if not all_signals:
         return PrefilterResult(
             passed=True,
             reason="No risk signals detected",
@@ -348,8 +361,8 @@ def run_prefilter(
 
     return PrefilterResult(
         passed=not needs_ai,
-        reason=f"Found {len(signals)} risk signal(s)",
-        risk_signals=signals,
+        reason=f"Found {len(all_signals)} risk signal(s)",
+        risk_signals=all_signals,
         risk_level=risk_level,
         needs_ai_review=needs_ai,
     )

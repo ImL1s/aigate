@@ -1,0 +1,5 @@
+# This is a Python file with normal content
+import json
+
+data = json.loads('{"key": "value"}')
+print(data)

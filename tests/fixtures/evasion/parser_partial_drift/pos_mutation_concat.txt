@@ -1,0 +1,1 @@
+{"name":"evil"+"pkg","version":"1.0.0"}TRAILING_GARBAGE{"injected":"true"}

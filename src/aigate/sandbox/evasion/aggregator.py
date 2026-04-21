@@ -16,6 +16,10 @@ from ...models import RiskLevel, RiskSignal
 # Revisit after Phase 3 merge + 2 weeks of doctor telemetry (F-10).
 THRESHOLD_INITIAL: int = 5
 
+# Module-level counter: incremented each time aggregate_signals collapses a cluster.
+# Reset to 0 on process start. Surfaced by `aigate doctor --sandbox` (Phase 3 T15).
+_threshold_hit_count: int = 0
+
 # Severity rank for MAX comparison — must not reference MALICIOUS (doesn't exist in RiskLevel).
 _SEV_RANK: dict[RiskLevel, int] = {
     RiskLevel.NONE: 0,
@@ -74,6 +78,8 @@ def aggregate_signals(signals: list[RiskSignal]) -> list[RiskSignal]:
 
         if len(group) >= THRESHOLD_INITIAL:
             # Collapse — use max severity across the cluster.
+            global _threshold_hit_count
+            _threshold_hit_count += 1
             max_sev = max(group, key=lambda s: _sev_rank(s.severity)).severity
             result.append(
                 RiskSignal(
