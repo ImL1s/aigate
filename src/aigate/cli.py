@@ -1562,10 +1562,12 @@ def doctor(ctx, sandbox_preflight: bool, sandbox_required: bool):
 
     if sandbox_preflight or sandbox_required:
         import platform as _platform
+        import subprocess as _subprocess
 
+        from .sandbox.observers.watchdog import stuck_timeout_from_env
         from .sandbox.runtime_select import detect_available, detect_linux_connect_observer
 
-        console.print("\n[bold]Sandbox preflight[/bold] (Phase 1a scaffold):")
+        console.print("\n[bold]Sandbox preflight[/bold]:")
         available = detect_available()
         if available:
             for backend_cls in available:
@@ -1578,11 +1580,49 @@ def doctor(ctx, sandbox_preflight: bool, sandbox_required: bool):
             obs = detect_linux_connect_observer()
             if obs:
                 console.print(f"  connect-observer: {obs}")
+                # Surface strace version for debuggability (REV-J R2)
+                if obs == "strace":
+                    try:
+                        _ver_out = _subprocess.check_output(
+                            ["strace", "--version"],
+                            stderr=_subprocess.STDOUT,
+                            text=True,
+                            timeout=5,
+                        )
+                        _ver_line = _ver_out.splitlines()[0] if _ver_out.strip() else "unknown"
+                        console.print(f"  strace version: {_ver_line}")
+                    except (OSError, _subprocess.SubprocessError):
+                        console.print("  strace version: [yellow]unavailable[/yellow]")
             else:
                 console.print(
                     "  connect-observer: NONE  "
                     "[yellow](DEGRADED \u2014 install strace or bpftrace)[/yellow]"
                 )
+
+            # ptrace_scope \u2014 REV-J R4: Ubuntu 24.04 hardened AMIs ship scope=2
+            # which causes strace to fail-closed with EPERM.
+            try:
+                with open("/proc/sys/kernel/yama/ptrace_scope") as _f:
+                    _scope = _f.read().strip()
+                _scope_desc: dict[str, str] = {
+                    "0": "permissive",
+                    "1": "restricted (default \u2014 strace OK)",
+                    "2": "hardened (strace will fail-closed; Phase 2.5 bpftrace needed)",
+                    "3": "locked (admin-set; strace blocked)",
+                }
+                console.print(
+                    f"  ptrace_scope: {_scope}  "
+                    f"({_scope_desc.get(_scope, 'unknown')})"
+                )
+            except (OSError, FileNotFoundError):
+                console.print("  ptrace_scope: N/A")
+
+            # Effective stuck-observer timeout \u2014 REV-E
+            _sto = stuck_timeout_from_env()
+            console.print(
+                f"  effective stuck timeout: {_sto}s  "
+                f"(AIGATE_OBSERVER_STUCK_TIMEOUT_S, clamp [2, 60])"
+            )
         else:
             console.print("  connect-observer: kernel (sandbox-exec)")
 

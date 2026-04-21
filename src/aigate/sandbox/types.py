@@ -136,6 +136,29 @@ class DynamicTraceEvent:
     source: str | None = None
 
 
+# ---------------------------------------------------------------------------
+# Event classification helper (REV-B)
+# ---------------------------------------------------------------------------
+
+
+def is_real_event(event: DynamicTraceEvent) -> bool:
+    """Return True iff ``event`` represents a genuine package-under-test action.
+
+    Synthetic events injected by the sandbox infrastructure MUST be excluded
+    from floor checks, quiet-run heuristics, and coverage decisions so they
+    cannot mask a genuinely silent (or parser-broken) run.
+
+    Excluded sources:
+    - ``"resource_probe"`` — periodic CPU/memory sampling inserted by the
+      sandbox harness; not caused by the package under test (REV-5).
+    - ``"observer_canary"`` — the pre-run ``open("/dev/null")`` sentinel
+      emitted by the observer canary harness to prove the parser is live
+      before the main child starts (REV-B / Task 2.3).
+    """
+    src = getattr(event, "source", None)
+    return src not in ("resource_probe", "observer_canary")
+
+
 @dataclass
 class DynamicTrace:
     """Result of a sandbox run — consumed structurally by policy.py (§3.2).
@@ -187,8 +210,8 @@ class DynamicTrace:
         if self.timeout or self.skipped_unexpected or self.error is not None:
             return True
         if self.ran and self.duration_ms >= self.FLOOR_APPLIES_IF_DURATION_MS_GTE:
-            # REV-5: exclude synthetic resource_probe events from floor
-            real_events = [e for e in self.events if getattr(e, "source", None) != "resource_probe"]
+            # REV-5 + REV-B: exclude synthetic events (resource_probe, observer_canary)
+            real_events = [e for e in self.events if is_real_event(e)]
             kinds = {e.kind for e in real_events}
             if (
                 len(kinds) < self.FLOOR_MIN_DISTINCT_KINDS
@@ -209,7 +232,7 @@ class DynamicTrace:
         """
         if not self.ran:
             return False
-        real_events = [e for e in self.events if getattr(e, "source", None) != "resource_probe"]
+        real_events = [e for e in self.events if is_real_event(e)]
         has_net = any(e.kind in ("connect", "dns") for e in real_events)
         has_extern_write = any(e.kind in ("write", "persist_write") for e in real_events)
         real_exec_count = sum(1 for e in real_events if e.kind == "exec")
