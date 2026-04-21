@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import pytest
 
-from aigate.cache import set_cached
+from aigate.cache import _cache_key, set_cached
 from aigate.config import Config
 from aigate.hooks import pip_hook
 from aigate.models import (
     AnalysisReport,
+    ConsensusResult,
     EnrichmentResult,
     PackageInfo,
     PrefilterResult,
     RiskLevel,
+    Verdict,
 )
 
 
@@ -141,9 +143,6 @@ async def test_pip_hook_uses_cache_on_hit(monkeypatch, tmp_path):
 async def test_pip_hook_does_not_cache_error_verdict(monkeypatch, tmp_path):
     """A transient AI ERROR must not get cached — otherwise one timeout
     silently suppresses retry for the full TTL window."""
-    from aigate.cache import _cache_key
-    from aigate.models import ConsensusResult, Verdict
-
     config = Config()
     config.cache_dir = str(tmp_path)
     config.enrichment.enabled = False
