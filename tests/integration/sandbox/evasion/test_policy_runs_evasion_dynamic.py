@@ -52,7 +52,8 @@ def test_env_mutation_static_plus_build_hooks_dynamic_escalates() -> None:
     """env_mutation static + build_hooks dynamic (exec+connect) → NEEDS_REVIEW.
 
     Provides ≥2 distinct MEDIUM+ evasion categories to trip the T14
-    monotone-lift gate.
+    monotone-lift gate: one static via `risk_signals`, one dynamic via
+    detector emission on the exec+connect event pair.
     """
     env_signal = RiskSignal(
         category="env_mutation",
@@ -61,34 +62,40 @@ def test_env_mutation_static_plus_build_hooks_dynamic_escalates() -> None:
         filepath="install.py",
     )
 
-    # exec + connect within 500ms triggers build_hooks dynamic detection
     exec_event = _make_event("exec", "/usr/bin/node")
     connect_event = _make_event("connect", "93.184.216.34:443")
 
-    trace = _make_clean_trace(
-        events=[exec_event, connect_event],
-    )
-    # Attach static signal as risk_signals on trace (T10 picks them up)
-    object.__setattr__(trace, "risk_signals", [env_signal]) if False else None
-    # Use dynamic_categories workaround: pass env_mutation via dynamic_categories
-    # since trace is a dataclass without risk_signals field.
-    # build_hooks fires via run_dynamic on exec+connect events.
-    # env_mutation via dynamic_categories simulates static→dynamic escalation.
-    trace2 = _make_clean_trace(
-        events=[exec_event, connect_event],
-        # Simulate env_mutation already detected (e.g. from prefilter pass)
-        # by putting it in a custom attribute that policy reads
-    )
+    # DynamicTrace dataclass has no risk_signals field; use a namespace
+    # object exposing the same attributes policy.py reads via getattr.
+    class _FakeTrace:
+        ran = True
+        runtime = "birdcage"
+        image_digest = ""
+        duration_ms = 500
+        timeout = False
+        events = [exec_event, connect_event]
+        signatures: list = []
+        canary_touches: list = []
+        observed: set = set()
+        skipped_expected: set = set()
+        skipped_unexpected: set = set()
+        error = None
+        risk_signals = [env_signal]
+        dynamic_categories: list = []
 
-    decision = decision_from_dynamic_trace(trace2)
-    # build_hooks fires via run_dynamic (exec + connect within window).
-    # Without env_mutation, only 1 category — no T14 trip expected.
-    # This test validates run_dynamic is called at all.
-    assert decision is None or decision.outcome in (
-        PolicyOutcome.SAFE,
-        PolicyOutcome.NEEDS_REVIEW,
-        PolicyOutcome.MALICIOUS,
-    ), f"Unexpected outcome: {decision}"
+        def has_observation_failure(self) -> bool:
+            return False
+
+        def is_suspiciously_quiet(self) -> bool:
+            return False
+
+    decision = decision_from_dynamic_trace(_FakeTrace())  # type: ignore[arg-type]
+    assert decision is not None
+    assert decision.outcome == PolicyOutcome.NEEDS_REVIEW, (
+        f"Expected NEEDS_REVIEW from 2 evasion categories "
+        f"(env_mutation static + build_hooks dynamic), "
+        f"got: {decision.outcome} ({decision.reason})"
+    )
 
 
 def test_parser_partial_drift_skipped_unexpected_escalates_via_fail_closed() -> None:
@@ -148,3 +155,41 @@ def test_two_dynamic_categories_from_detectors_trigger_gate() -> None:
         f"Expected NEEDS_REVIEW from 2 dynamic categories, "
         f"got: {decision.outcome} ({decision.reason})"
     )
+
+
+def test_t14_needs_review_plus_canary_escalates_to_malicious() -> None:
+    """Regression: T14 NEEDS_REVIEW must not short-circuit canary escalation (P1 PR #7).
+
+    A trace that trips T14 (≥2 evasion categories) AND also has canary_touches
+    must return MALICIOUS — the monotone-lift contract means canary wins.
+    """
+
+    class _FakeTrace:
+        ran = True
+        runtime = "birdcage"
+        image_digest = ""
+        duration_ms = 500
+        timeout = False
+        events: list = []
+        signatures: list = []
+        canary_touches = ["/tmp/aigate-canary-abc123"]
+        observed: set = set()
+        skipped_expected: set = set()
+        skipped_unexpected: set = set()
+        error = None
+        risk_signals: list = []
+        dynamic_categories = ["env_mutation", "time_bomb"]
+
+        def has_observation_failure(self) -> bool:
+            return False
+
+        def is_suspiciously_quiet(self) -> bool:
+            return False
+
+    decision = decision_from_dynamic_trace(_FakeTrace())  # type: ignore[arg-type]
+    assert decision is not None
+    assert decision.outcome == PolicyOutcome.MALICIOUS, (
+        f"Expected MALICIOUS (canary must escalate over T14 NEEDS_REVIEW), "
+        f"got: {decision.outcome} ({decision.reason})"
+    )
+    assert "canary" in decision.reason.lower()
