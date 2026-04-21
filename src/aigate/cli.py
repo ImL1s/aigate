@@ -48,7 +48,7 @@ from .resolver import (
     read_local_source_files,
     resolve_package,
 )
-from .sandbox import (
+from .sandbox import (  # noqa: F401 — re-exported for test import boundary contract
     SandboxBackend,
     SandboxMode,
     SandboxUnavailable,
@@ -347,7 +347,8 @@ def check(
         or debug_trace
     )
     normalized_mode = _normalize_sandbox_mode(sandbox_mode)
-    if sandbox_requested:
+    # Phase 1b: npm runs real birdcage; other ecosystems remain Phase 1a scaffold.
+    if sandbox_requested and ecosystem != "npm":
         _warn_sandbox_scaffold(
             command="check",
             mode=normalized_mode,
@@ -366,6 +367,9 @@ def check(
             local_path,
             emit_opensrc=emit_opensrc,
             opensrc_overwrite=opensrc_overwrite,
+            sandbox_requested=sandbox_requested,
+            sandbox_mode_str=normalized_mode,
+            sandbox_timeout_s=sandbox_timeout,
         )
     )
 
@@ -382,6 +386,9 @@ async def _check(
     *,
     emit_opensrc: bool | None = None,
     opensrc_overwrite: str = "never",
+    sandbox_requested: bool = False,
+    sandbox_mode_str: str | None = None,
+    sandbox_timeout_s: int | None = None,
 ):
     config = Config.load()
     level = AnalysisLevel(level_str)
@@ -390,6 +397,7 @@ async def _check(
 
     oversized_msg = None  # Set by crates 200MB cap; force NEEDS_HUMAN_REVIEW below
     source_unavailable_msg: str | None = None  # Phase 3: bytes-not-inspected gate
+    _sandbox_trace = None  # Set at step 2.5 for npm+birdcage registry runs
 
     if local_path:
         # Offline mode: skip registry, read local source directly
@@ -496,6 +504,18 @@ async def _check(
                 source_unavailable_msg = f"download_failed: {type(e).__name__}: {e}"
                 source_files = {}
 
+        # 2.5 Sandbox execution (Phase 1b — birdcage, npm registry-mode only)
+        if sandbox_requested and ecosystem == "npm":
+            _sandbox_trace = await _run_sandbox_for_npm(
+                package=package,
+                config=config,
+                mode_str=sandbox_mode_str,
+                timeout_s=sandbox_timeout_s,
+                use_json=use_json,
+                pkg_version=pkg_version,
+                ecosystem=ecosystem,
+            )
+
     # 3. Static pre-filter
     prefilter_result = run_prefilter(package, config, source_files)
 
@@ -568,6 +588,8 @@ async def _check(
         enrichment=enrichment_result,
         total_latency_ms=total_ms,
     )
+    if _sandbox_trace is not None:
+        report.dynamic_trace = _sandbox_trace
 
     # 5. Cache result
     set_cached(
@@ -634,6 +656,81 @@ def _emit_skipped(reason: str):
     from .models import OpensrcEmitResult
 
     return OpensrcEmitResult(emitted=False, reason=reason)
+
+
+async def _fetch_npm_tarball(tarball_url: str) -> str | None:
+    """Download an npm tarball to a tempfile. Returns the path or None on failure."""
+    if not tarball_url:
+        return None
+    import tempfile
+
+    try:
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+            resp = await client.get(tarball_url)
+            resp.raise_for_status()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".tgz") as f:
+            f.write(resp.content)
+            return f.name
+    except Exception:
+        return None
+
+
+async def _run_sandbox_for_npm(
+    *,
+    package: PackageInfo,
+    config: Config,
+    mode_str: str | None,
+    timeout_s: int | None,
+    use_json: bool,
+    pkg_version: str | None,
+    ecosystem: str,
+):
+    """Execute birdcage sandbox for an npm package. Returns DynamicTrace or None."""
+    from .sandbox.runtime_select import select_backend
+    from .sandbox.types import SandboxRunRequest
+
+    sb_cfg = config.sandbox
+    if sb_cfg.network_policy == "allow":
+        console.print(
+            "[yellow]WARN: sandbox.network_policy=allow — "
+            "overriding to deny-outbound for tier-honest enforcement (REV-1)[/yellow]"
+        )
+
+    mode_map = {"light": SandboxMode.LIGHT, "strict": SandboxMode.STRICT}
+    sb_mode = mode_map.get(mode_str or "light", SandboxMode.LIGHT)
+    effective_timeout = timeout_s if timeout_s is not None else sb_cfg.timeout_s
+
+    tarball_url = package.metadata.get("version_data", {}).get("dist", {}).get("tarball", "")
+    tarball_path = await _fetch_npm_tarball(tarball_url)
+    if not tarball_path:
+        console.print("[yellow]WARN: could not fetch npm tarball; skipping sandbox[/yellow]")
+        return None
+
+    try:
+        backend = select_backend(sb_mode, required=sb_cfg.required)
+    except SandboxUnavailable as exc:
+        if sb_cfg.required:
+            _emit_error(
+                use_json=use_json,
+                package_name=package.name,
+                package_version=pkg_version or "",
+                ecosystem=ecosystem,
+                message=f"Sandbox required but unavailable: {exc}",
+            )
+        console.print(f"[yellow]WARN: sandbox unavailable ({exc}); continuing static-only[/yellow]")
+        return None
+
+    request = SandboxRunRequest(
+        package_name=package.name,
+        version=package.version,
+        ecosystem="npm",
+        source_archive_path=tarball_path,
+        mode=sb_mode,
+        timeout_s=effective_timeout,
+    )
+    with console.status("Running sandbox analysis..."):
+        trace = await backend.run(request)
+    return trace
 
 
 def _scan_single_file(
@@ -1351,8 +1448,15 @@ def instructions(tools: tuple[str, ...]):
     default=False,
     help="Run the deep sandbox preflight check (PRD §3.3 P1-9).",
 )
+@click.option(
+    "--sandbox-required",
+    "sandbox_required",
+    is_flag=True,
+    default=False,
+    help="Exit code 3 if no sandbox backend is available.",
+)
 @click.pass_context
-def doctor(ctx, sandbox_preflight: bool):
+def doctor(ctx, sandbox_preflight: bool, sandbox_required: bool):
     """Diagnose aigate setup: backends, hooks, config."""
     from .detect import KNOWN_BACKENDS, detect_backends, detect_hooks
 
@@ -1456,27 +1560,34 @@ def doctor(ctx, sandbox_preflight: bool):
     except Exception as exc:  # pragma: no cover — defensive
         console.print(f"  [yellow]sandbox config unavailable: {exc}[/yellow]")
 
-    if sandbox_preflight:
-        console.print("\n[bold]Sandbox preflight:[/bold]")
-        console.print(
-            "  [yellow]WARN:[/yellow] aigate doctor --sandbox is a Phase 1a scaffold — "
-            "dynamic sandbox runtimes (Birdcage / Docker / Tracee) are not yet "
-            "bundled. Reporting the types-only skeleton that IS available."
-        )
-        # Prove the sandbox module imports cleanly; otherwise worker #1's
-        # scaffold is broken and the CLI flag can't ever progress past this.
-        console.print(
-            f"  sandbox module: "
-            f"backend ABC=[green]{SandboxBackend.__name__}[/green], "
-            f"modes=[cyan]{','.join(m.value for m in SandboxMode)}[/cyan]"
-        )
-        console.print(
-            "  [dim]runtime detection will land in Phase 1b "
-            "(detect_available + runtime_select).[/dim]"
-        )
-        # Sanity-check: the SandboxUnavailable symbol is importable so
-        # downstream error-handling code can depend on it today.
-        assert SandboxUnavailable is not None
+    if sandbox_preflight or sandbox_required:
+        import platform as _platform
+
+        from .sandbox.runtime_select import detect_available, detect_linux_connect_observer
+
+        console.print("\n[bold]Sandbox preflight[/bold] (Phase 1a scaffold):")
+        available = detect_available()
+        if available:
+            for backend_cls in available:
+                console.print(f"  [green]\u2713[/green] {backend_cls.name}")
+        else:
+            console.print("  [dim]\u2717 no backends available[/dim]")
+
+        plat = _platform.system()
+        if plat == "Linux":
+            obs = detect_linux_connect_observer()
+            if obs:
+                console.print(f"  connect-observer: {obs}")
+            else:
+                console.print(
+                    "  connect-observer: NONE  "
+                    "[yellow](DEGRADED \u2014 install strace or bpftrace)[/yellow]"
+                )
+        else:
+            console.print("  connect-observer: kernel (sandbox-exec)")
+
+        if sandbox_required and not available:
+            sys.exit(3)
 
     console.print()
 
