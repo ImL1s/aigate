@@ -1,0 +1,1 @@
+config = {'PATH': os.environ['PATH'], 'HOME': os.environ['HOME']}

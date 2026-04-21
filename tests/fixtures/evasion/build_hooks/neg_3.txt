@@ -1,0 +1,2 @@
+# just a readme
+This package does nothing suspicious.

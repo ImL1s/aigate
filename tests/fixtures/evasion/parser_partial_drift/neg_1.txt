@@ -1,0 +1,1 @@
+{"name":"clean-pkg","version":"1.0.0","description":"A clean package","license":"MIT"}

@@ -1,0 +1,9 @@
+# Source: npm/cli/lib/utils/config/definitions.js (representative snippet)
+# This is a realistic excerpt from npm's own source — reading env vars, not writing them.
+const npmConfigCache = process.env.npm_config_cache
+  || path.join(os.homedir(), '.npm');
+const npmToken = process.env.NPM_TOKEN;  // read-only access for auth
+const githubToken = process.env.GITHUB_TOKEN;  // read-only for registry auth
+if (process.env.CI) {
+  loglevel = 'notice';
+}

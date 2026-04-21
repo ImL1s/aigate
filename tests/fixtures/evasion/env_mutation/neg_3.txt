@@ -1,0 +1,2 @@
+os.environ.setdefault('CACHE', '/tmp')
+os.environ.setdefault('PYTHONPATH', '')

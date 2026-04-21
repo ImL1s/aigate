@@ -14,6 +14,8 @@ from .rules.behavior_chains import detect_behavior_chains
 from .rules.compound import check_compound_signals
 from .rules.loader import Rule, load_rules
 from .rules.popular_packages import _read_cache
+from .sandbox.evasion.aggregator import aggregate_signals as _aggregate_evasion
+from .sandbox.evasion.registry import run_static as _run_evasion_static
 
 logger = logging.getLogger(__name__)
 
@@ -261,6 +263,7 @@ def run_prefilter(
 ) -> PrefilterResult:
     """Run all pre-filter checks. Returns whether AI review is needed."""
     signals: list[str] = []
+    evasion_signals: list[RiskSignal] = []  # Phase 3 T9: structured RiskSignal objects
 
     # 1. Blocklist check
     if package.name in config.blocklist:
@@ -296,6 +299,13 @@ def run_prefilter(
             config=config,
         )
         signals.extend(code_signals)
+
+    # 5.0 Evasion detector static pass (Phase 3 T9 + T8 aggregator)
+    # Results are RiskSignal objects; aggregator collapses LOW/MEDIUM clusters
+    # per T8 rules. HIGH/CRITICAL always preserved individually.
+    if source_files:
+        _raw = _run_evasion_static(source_files)
+        evasion_signals.extend(_aggregate_evasion(_raw))
 
     # 5.1 Ecosystem-specific compile-time-attack signals (Rust / crates)
     if source_files and package.ecosystem in ("crates", "cargo"):
@@ -335,11 +345,14 @@ def run_prefilter(
         entropy_signals = check_high_entropy(source_files)
         signals.extend(entropy_signals)
 
-    # Determine risk level and whether AI review is needed
-    risk_level = _calculate_risk_level(signals)
+    # Determine risk level and whether AI review is needed.
+    # Evasion RiskSignals remain structured so T14 multi-evasion gate in
+    # decision_from_prefilter sees them via isinstance(s, RiskSignal) filter.
+    all_signals: list[str | RiskSignal] = [*signals, *evasion_signals]
+    risk_level = _calculate_risk_level(all_signals)
     needs_ai = risk_level in (RiskLevel.MEDIUM, RiskLevel.HIGH, RiskLevel.CRITICAL)
 
-    if not signals:
+    if not all_signals:
         return PrefilterResult(
             passed=True,
             reason="No risk signals detected",
@@ -348,8 +361,8 @@ def run_prefilter(
 
     return PrefilterResult(
         passed=not needs_ai,
-        reason=f"Found {len(signals)} risk signal(s)",
-        risk_signals=signals,
+        reason=f"Found {len(all_signals)} risk signal(s)",
+        risk_signals=all_signals,
         risk_level=risk_level,
         needs_ai_review=needs_ai,
     )
@@ -788,6 +801,27 @@ def _shannon_entropy(text: str) -> float:
     return -sum((count / length) * math.log2(count / length) for count in freq.values())
 
 
+# Evasion categories — single-HIGH must not auto-escalate to MALICIOUS here.
+# Per plan REV-NI2, autonomous blocking requires ≥2 orthogonal HIGH tactics
+# (enforced by T14 multi-evasion gate in policy.py). Legacy _calculate_risk_level
+# would otherwise bypass the gate via the 1-HIGH→HIGH→MALICIOUS chain.
+_EVASION_CATEGORIES: frozenset[str] = frozenset(
+    {
+        "env_mutation",
+        "time_bomb",
+        "build_hooks",
+        "derived_exfil",
+        "direct_xpc",
+        "anti_debug",
+        "parser_partial_drift",
+    }
+)
+
+
+def _is_evasion_signal(s: str | RiskSignal) -> bool:
+    return isinstance(s, RiskSignal) and s.category in _EVASION_CATEGORIES
+
+
 def _signal_severity(s: str | RiskSignal) -> RiskLevel:
     """Extract severity from a signal (structured or legacy string)."""
     if isinstance(s, RiskSignal):
@@ -812,15 +846,24 @@ def _calculate_risk_level(signals: Sequence[str | RiskSignal]) -> RiskLevel:
     if not signals:
         return RiskLevel.NONE
 
+    # Evasion signals are excluded from legacy HIGH escalation — T14 gate in
+    # policy.py enforces REV-NI2 (≥2 orthogonal HIGH required for MALICIOUS).
+    # They still count toward MEDIUM so needs_ai_review triggers.
     high_count = sum(
-        1 for s in signals if _signal_severity(s) in (RiskLevel.HIGH, RiskLevel.CRITICAL)
+        1
+        for s in signals
+        if _signal_severity(s) in (RiskLevel.HIGH, RiskLevel.CRITICAL) and not _is_evasion_signal(s)
     )
 
     # Count unique MEDIUM patterns (extract pattern before 'in source:' / 'in install_script:')
     medium_patterns: set[str] = set()
     for s in signals:
         sev = _signal_severity(s)
-        if sev == RiskLevel.MEDIUM:
+        # Treat evasion HIGH as MEDIUM for legacy scoring (drives needs_ai_review
+        # but does not auto-escalate; T14 gate is the authoritative path).
+        if sev == RiskLevel.MEDIUM or (
+            _is_evasion_signal(s) and sev in (RiskLevel.HIGH, RiskLevel.CRITICAL)
+        ):
             s_str = str(s)
             # Extract pattern key: "dangerous_pattern(MEDIUM): 'pattern' in source:file"
             # → key is "pattern" (deduplicate across files)

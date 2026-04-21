@@ -1560,6 +1560,20 @@ def doctor(ctx, sandbox_preflight: bool, sandbox_required: bool):
     except Exception as exc:  # pragma: no cover — defensive
         console.print(f"  [yellow]sandbox config unavailable: {exc}[/yellow]")
 
+    # 7b. Evasion detector diagnostics (Phase 3 T15)
+    console.print("\n[bold]Evasion Detectors:[/bold]")
+    try:
+        from .sandbox.evasion import aggregator as _agg_mod
+        from .sandbox.evasion.registry import all_detectors as _all_detectors
+
+        _det_count = len(_all_detectors())
+        _thc = getattr(_agg_mod, "_threshold_hit_count", 0)
+        console.print(f"  evasion.detector_count: {_det_count}")
+        console.print(f"  evasion.threshold_hit_count: {_thc}")
+    except Exception:  # pragma: no cover — defensive
+        console.print("  evasion.detector_count: unavailable")
+        console.print("  evasion.threshold_hit_count: 0")
+
     if sandbox_preflight or sandbox_required:
         import platform as _platform
         import subprocess as _subprocess

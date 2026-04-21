@@ -1,0 +1,1 @@
+if datetime.now() > datetime(2027, 1, 1): payload.download()

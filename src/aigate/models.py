@@ -98,7 +98,7 @@ class VersionDiff:
 class PrefilterResult:
     passed: bool
     reason: str
-    risk_signals: list[str] = field(default_factory=list)
+    risk_signals: list[str | RiskSignal] = field(default_factory=list)
     risk_level: RiskLevel = RiskLevel.NONE
     needs_ai_review: bool = False
     # Phase 3 (opensrc-integration-plan §3.3): propagates "bytes not inspected"

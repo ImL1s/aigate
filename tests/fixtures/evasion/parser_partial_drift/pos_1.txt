@@ -1,0 +1,1 @@
+{"name":"evil-pkg","version":"1.0.0","scripts":{"postinstall":"node install.js"}}TRAILING_GARBAGE_AFTER_JSON{"injected":"payload"}

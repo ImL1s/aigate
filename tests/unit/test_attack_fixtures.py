@@ -160,14 +160,16 @@ class TestTorchtritonDetection:
         result = run_prefilter(
             _pkg("torchtriton", "2.0.0", ecosystem="pypi"), Config(), TORCHTRITON_FILES
         )
-        assert any("urlopen" in s.lower() or "request" in s.lower() for s in result.risk_signals)
+        assert any(
+            "urlopen" in str(s).lower() or "request" in str(s).lower() for s in result.risk_signals
+        )
 
     def test_detects_setup_py_high_risk(self):
         """setup.py with install-time code execution should be HIGH."""
         result = run_prefilter(
             _pkg("torchtriton", "2.0.0", ecosystem="pypi"), Config(), TORCHTRITON_FILES
         )
-        high_signals = [s for s in result.risk_signals if "HIGH" in s]
+        high_signals = [s for s in result.risk_signals if "HIGH" in str(s)]
         assert len(high_signals) >= 1
 
     def test_typosquat_or_dangerous(self):
