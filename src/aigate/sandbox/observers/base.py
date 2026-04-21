@@ -114,10 +114,19 @@ class FifoSink(ObserverSink):
 
         Opens with ``O_NONBLOCK`` to avoid a deadlock when the write end
         is not yet connected, then drains in a poll loop.
+
+        NOTE (Phase 2, reviewer P2 PR #6 comment 3117032782): BirdcageBackend
+        does NOT call this method. It runs its own inline per-chunk reader
+        inside ``_run_inside_scratch`` (lines ~325–390) so it can call
+        ``observer.parse_event(chunk, scrub)`` incrementally. This method
+        stays for test utilities that want the whole-stream-then-close
+        contract (e.g. isolated parser fuzzing). The sink lifecycle itself —
+        mkfifo at ``__enter__`` and unlink at ``cleanup()`` — is authoritative
+        regardless of which reader is used.
         """
         import asyncio
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         fd = os.open(self.fifo_path, os.O_RDONLY | os.O_NONBLOCK)
         try:
             chunks: list[bytes] = []

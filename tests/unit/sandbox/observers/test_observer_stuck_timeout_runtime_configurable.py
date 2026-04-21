@@ -45,7 +45,7 @@ def _make_fake_asyncio(tick: list[float]) -> Any:
         tick[0] += 1.0
 
     mock_asyncio.sleep = AsyncMock(side_effect=fake_sleep)
-    mock_asyncio.get_event_loop.return_value.time.side_effect = lambda: tick[0]
+    mock_asyncio.get_running_loop.return_value.time.side_effect = lambda: tick[0]
     return mock_asyncio
 
 
@@ -121,7 +121,7 @@ async def test_watchdog_fires_drift_masked() -> None:
 
     mock_asyncio = MagicMock()
     mock_asyncio.sleep = AsyncMock(side_effect=fake_sleep_raw)
-    mock_asyncio.get_event_loop.return_value.time.side_effect = lambda: tick[0]
+    mock_asyncio.get_running_loop.return_value.time.side_effect = lambda: tick[0]
 
     # timeout_s set high so fully-silent branch never fires first
     watchdog = ObserverWatchdog(events, raw_lines, stop, timeout_s=30)
@@ -151,7 +151,7 @@ async def test_watchdog_stays_quiet_when_events_flow() -> None:
 
     mock_asyncio = MagicMock()
     mock_asyncio.sleep = AsyncMock(side_effect=fake_sleep_events)
-    mock_asyncio.get_event_loop.return_value.time.side_effect = lambda: tick[0]
+    mock_asyncio.get_running_loop.return_value.time.side_effect = lambda: tick[0]
 
     watchdog = ObserverWatchdog(events, raw_lines, stop, timeout_s=3)
 
@@ -187,7 +187,7 @@ async def test_watchdog_stays_quiet_for_monorepo_45s_quiet_window() -> None:
 
     mock_asyncio = MagicMock()
     mock_asyncio.sleep = AsyncMock(side_effect=fake_sleep_intermittent)
-    mock_asyncio.get_event_loop.return_value.time.side_effect = lambda: tick[0]
+    mock_asyncio.get_running_loop.return_value.time.side_effect = lambda: tick[0]
 
     watchdog = ObserverWatchdog(events, raw_lines, stop, timeout_s=DEFAULT_STUCK_TIMEOUT_S)
 

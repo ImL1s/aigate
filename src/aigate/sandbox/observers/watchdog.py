@@ -140,7 +140,7 @@ class ObserverWatchdog:
             )
             events_delta = current.events_count - last.events_count
             raw_delta = current.raw_lines_count - last.raw_lines_count
-            now = asyncio.get_event_loop().time()
+            now = asyncio.get_running_loop().time()
 
             # --- Fully silent check (both counters stuck) -----------------
             if events_delta == 0 and raw_delta == 0:

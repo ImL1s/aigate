@@ -81,7 +81,13 @@ def _mock_strace_observer(real_event: DynamicTraceEvent | None = None) -> MagicM
     )
     obs.check_available.return_value = True
     obs.cleanup = AsyncMock()
-    obs.parse_event.return_value = real_event  # None → no events → observer_silent path
+    # Return real_event on first call, None forever after — prevents the
+    # post-drain flush loop (PR #6 comment 3117030564 fix) from spinning
+    # on a MagicMock that returns the same event every invocation.
+    if real_event is not None:
+        obs.parse_event.side_effect = [real_event] + [None] * 10_000
+    else:
+        obs.parse_event.return_value = None  # observer_silent path
     return obs
 
 
@@ -92,7 +98,6 @@ def _linux_observer_cm(mock_observer: MagicMock, read_side_effect=BlockingIOErro
     return [
         patch("aigate.sandbox.birdcage_backend.platform.system", return_value="Linux"),
         patch("aigate.sandbox.birdcage_backend.select_linux_observer", return_value=mock_observer),
-        patch("aigate.sandbox.birdcage_backend.emit_canary_syscall"),
         patch("aigate.sandbox.birdcage_backend.os.mkfifo"),
         patch("aigate.sandbox.birdcage_backend.os.open", return_value=99),
         patch("aigate.sandbox.birdcage_backend.os.read", side_effect=read_side_effect),

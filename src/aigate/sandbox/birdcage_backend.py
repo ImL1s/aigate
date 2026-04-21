@@ -22,7 +22,7 @@ from collections.abc import Iterable
 from .canary import generate_canary_scheme
 from .errors import SandboxUnavailable
 from .observers.base import FifoSink
-from .observers.canary import emit_canary_syscall
+from .observers.canary import CANARY_PATH, classify_network_capture_coverage
 from .observers.watchdog import ObserverWatchdog
 from .runtime_select import detect_linux_connect_observer, select_linux_observer
 from .secrets import redact_secrets
@@ -235,7 +235,24 @@ class BirdcageBackend(SandboxBackend):
         if observer is not None:
             sink = FifoSink(fifo_path)
             sink.__enter__()  # os.mkfifo — creates the named pipe
-            argv = observer.argv_prefix(sink) + birdcage_argv
+            # REV-B canary ordering fix (reviewer P1, PR #6 comment 3117029517):
+            # The canary MUST execute as a traced child of strace — emit it
+            # inside the `--` subtree via a sh wrapper that opens CANARY_PATH
+            # before exec'ing birdcage. Previously `emit_canary_syscall` ran
+            # as an aigate sibling and was never in strace's ptrace tree, so
+            # the canary event never appeared in the FIFO and every quiet
+            # package tripped `real_event_count < 1` → NETWORK_CAPTURE
+            # skipped_unexpected, reopening the REV-B liveness hole.
+            canary_wrap = [
+                "/bin/sh",
+                "-c",
+                # `cat CANARY_PATH` triggers openat(); the file does not exist
+                # (ENOENT is fine — strace still logs the syscall). `exec "$@"`
+                # replaces sh with birdcage so the process tree flattens.
+                f'cat {CANARY_PATH} >/dev/null 2>&1 || true\nexec "$@"',
+                "sh",  # $0 for sh -c
+            ]
+            argv = observer.argv_prefix(sink) + canary_wrap + birdcage_argv
         else:
             argv = birdcage_argv
 
@@ -250,11 +267,10 @@ class BirdcageBackend(SandboxBackend):
         }
         start_ms = int(time.monotonic() * 1000)
 
-        # Emit canary BEFORE the main subprocess (REV-B).
-        # The canary subprocess opens OBSERVER_CANARY_MARKER which strace
-        # captures through the PGID trace, proving parser liveness.
-        if observer is not None and sink is not None:
-            emit_canary_syscall(sink)
+        # REV-B canary is now emitted INSIDE the traced subtree via the sh
+        # wrapper in `argv` (see canary_wrap above). The old sibling-subprocess
+        # call to `emit_canary_syscall` was outside strace's ptrace tree and
+        # is gone.
 
         # start_new_session=True:
         # - observer present → strace is PGID leader (REV-C); birdcage is its
@@ -324,7 +340,7 @@ class BirdcageBackend(SandboxBackend):
             """Stream strace output from FIFO; drain remaining data after stop."""
             if observer is None or sink is None:
                 return
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             fd = -1
             try:
                 fd = await loop.run_in_executor(
@@ -358,6 +374,21 @@ class BirdcageBackend(SandboxBackend):
                             observer_events.append(ev)
                 except (BlockingIOError, OSError):
                     pass
+                # Flush any complete lines buffered in the observer parser.
+                # parse_event consumes ONE newline-terminated line per call;
+                # a single FIFO read can contain dozens of lines, of which
+                # only the first is consumed per chunk in the drain loop above.
+                # Without this flush, the tail ~95% of lines (often the
+                # postinstall exfil attempts) silently vanish (reviewer P1,
+                # PR #6 comment 3117030564). Hard cap 100_000 iterations
+                # in case a buggy parser never returns None (safety rail
+                # against infinite loop).
+                with contextlib.suppress(Exception):
+                    for _ in range(100_000):
+                        ev = observer.parse_event(b"", scrub)
+                        if ev is None:
+                            break
+                        observer_events.append(ev)
             finally:
                 if fd >= 0:
                     with contextlib.suppress(OSError):
@@ -463,16 +494,23 @@ class BirdcageBackend(SandboxBackend):
                 # REV-A drift-aware watchdog tripped (fully-silent or drift-masked).
                 skipped_unexpected.add(SandboxCoverage.NETWORK_CAPTURE)
                 error = error or "stuck_observer: drift-aware watchdog tripped"
-            elif real_event_count < 1:
-                # REV-B + REV-F: observer alive but zero real events — fail-closed.
-                # Canary event (source="observer_canary") excluded by is_real_event().
-                skipped_unexpected.add(SandboxCoverage.NETWORK_CAPTURE)
-                error = error or "observer_silent: no real events observed (canary missing)"
             else:
-                # Observer produced ≥1 real event — coverage confirmed.
-                observed.add(SandboxCoverage.NETWORK_CAPTURE)
-                observed.add(SandboxCoverage.DNS)
-                observed.add(SandboxCoverage.PROCESS_TREE)
+                # Healthy path: defer the ≥1 real-event check to the shared
+                # helper (closes reviewer P2, PR #6 comment 3117031748 dead-code
+                # concern — backend and tests now exercise the same helper).
+                # Canary events (source="observer_canary") are excluded by
+                # is_real_event() inside the helper.
+                observed_cov, skipped_cov = classify_network_capture_coverage(all_events)
+                observed.update(observed_cov)
+                skipped_unexpected.update(skipped_cov)
+                if skipped_cov:
+                    error = error or "observer_silent: no real events observed (canary missing)"
+                else:
+                    # Observer produced ≥1 real event — also credit DNS +
+                    # process-tree coverage since strace -e trace=connect,dns,
+                    # clone,execve gives us all three for free.
+                    observed.add(SandboxCoverage.DNS)
+                    observed.add(SandboxCoverage.PROCESS_TREE)
 
         return DynamicTrace(
             ran=True,
