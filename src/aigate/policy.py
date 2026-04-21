@@ -330,12 +330,10 @@ def decision_from_dynamic_trace(
             reason="Multi-evasion gate: ≥2 HIGH evasion tactics with dynamic confirmation",
             should_block_install=True,
         )
-    if _gate_outcome == PolicyOutcome.NEEDS_REVIEW:
-        return PolicyDecision(
-            outcome=PolicyOutcome.NEEDS_REVIEW,
-            exit_code=1,
-            reason="Multi-evasion gate: ≥2 evasion tactics detected",
-        )
+    # NEEDS_REVIEW is held as a pending verdict — canary / HIGH-severity scans
+    # below may escalate to MALICIOUS. Monotone-lift: later MALICIOUS wins,
+    # otherwise T14 NEEDS_REVIEW is the final answer.
+    _t14_pending_needs_review = _gate_outcome == PolicyOutcome.NEEDS_REVIEW
 
     # Scan events + signatures for HIGH/CRITICAL signals.
     highest_severity = RiskLevel.NONE
@@ -404,6 +402,15 @@ def decision_from_dynamic_trace(
             outcome=PolicyOutcome.NEEDS_REVIEW,
             exit_code=1,
             reason="Sandbox run was suspiciously quiet (no network, no external writes, no exec)",
+        )
+
+    # Pending T14 NEEDS_REVIEW from the multi-evasion gate — canary / HIGH
+    # scans above did not escalate further, so the gate verdict stands.
+    if _t14_pending_needs_review:
+        return PolicyDecision(
+            outcome=PolicyOutcome.NEEDS_REVIEW,
+            exit_code=1,
+            reason="Multi-evasion gate: ≥2 evasion tactics detected",
         )
 
     return None

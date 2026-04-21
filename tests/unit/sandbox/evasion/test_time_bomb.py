@@ -148,6 +148,19 @@ def test_detect_dynamic_missing_target_is_silent(detector: TimeBombDetector) -> 
     assert result == []
 
 
+def test_detect_dynamic_non_numeric_target_does_not_crash(
+    detector: TimeBombDetector,
+) -> None:
+    """Regression: non-numeric target must not raise ValueError (P1 from PR #7).
+
+    strace can emit sleep events with textual targets (e.g. signal names, flags);
+    earlier implementation called int(e.target or "0") unguarded.
+    """
+    event = DynamicTraceEvent(kind="sleep", ts_ms=1000, pid=1, process="python", target="SIGALRM")
+    trace = DynamicTrace(ran=True, runtime="birdcage", events=[event])
+    assert detector.detect_dynamic(trace) == []
+
+
 # ---------------------------------------------------------------------------
 # Multiple files — description references correct path
 # ---------------------------------------------------------------------------

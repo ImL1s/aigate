@@ -1,4 +1,4 @@
-"""Evasion detector: anti-debugging techniques (Phase 3 T5).
+"""Evasion detector: anti-debugging techniques (Phase 3 T7).
 
 Detects static patterns that indicate a package is checking whether it is
 being debugged or traced (ptrace, PTRACE_TRACEME, debugger-detection APIs).

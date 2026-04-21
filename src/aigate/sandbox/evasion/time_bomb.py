@@ -70,5 +70,13 @@ class TimeBombDetector(Detector):
 
     def detect_dynamic(self, trace: DynamicTrace) -> list[str]:
         """Return CATEGORY if any trace event is a sleep longer than 30 seconds."""
-        long_sleeps = [e for e in trace.events if e.kind == "sleep" and int(e.target or "0") > 30]
+        long_sleeps = [e for e in trace.events if e.kind == "sleep" and _safe_int(e.target) > 30]
         return [self.CATEGORY] if long_sleeps else []
+
+
+def _safe_int(val: str | None) -> int:
+    """Parse int from trace event target; non-numeric targets yield 0."""
+    try:
+        return int(val or "0")
+    except (TypeError, ValueError):
+        return 0
