@@ -47,8 +47,6 @@ class AntiDebugDetector(Detector):
     def detect_dynamic(self, trace: DynamicTrace) -> list[str]:
         """Return CATEGORY if strace shows ptrace syscall events."""
         ptrace_events = [
-            e
-            for e in trace.events
-            if e.kind == "exec" and "ptrace" in (e.target or "").lower()
+            e for e in trace.events if e.kind == "exec" and "ptrace" in (e.target or "").lower()
         ]
         return [self.CATEGORY] if ptrace_events else []
