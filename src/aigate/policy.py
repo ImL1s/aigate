@@ -313,7 +313,11 @@ def decision_from_dynamic_trace(
     _trace_static_signals = [
         s for s in (getattr(trace, "risk_signals", []) or []) if isinstance(s, RiskSignal)
     ]
-    _dynamic_cats: list[str] = list(getattr(trace, "dynamic_categories", []) or [])
+    # T10: run all detectors' dynamic pass and merge with trace.dynamic_categories.
+    # Policy-local list only — trace.signatures is never mutated.
+    _detector_dynamic_cats: list[str] = _evasion_mod.run_dynamic(trace)
+    _trace_dynamic_cats: list[str] = list(getattr(trace, "dynamic_categories", []) or [])
+    _dynamic_cats: list[str] = _trace_dynamic_cats + _detector_dynamic_cats
     _categories_dict = _evasion_mod.categories_from_signals(_trace_static_signals, _dynamic_cats)
     _dynamic_confirmed: set[str] = set(_dynamic_cats)
     _gate_outcome = _apply_multi_evasion_gate(

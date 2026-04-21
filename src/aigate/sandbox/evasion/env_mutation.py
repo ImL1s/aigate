@@ -38,9 +38,7 @@ class EnvMutationDetector(Detector):
                     RiskSignal(
                         category=self.CATEGORY,
                         severity=self.SEVERITY,
-                        description=(
-                            f"sensitive env mutation in {path}: {match.group(0)[:80]}"
-                        ),
+                        description=(f"sensitive env mutation in {path}: {match.group(0)[:80]}"),
                     )
                 )
         return signals

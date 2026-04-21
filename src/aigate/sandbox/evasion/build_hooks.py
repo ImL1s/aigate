@@ -44,8 +44,7 @@ class BuildHooksDetector(Detector):
                                     category=self.CATEGORY,
                                     severity=self.SEVERITY,
                                     description=(
-                                        f"npm lifecycle hook in {path}: "
-                                        f"{hook}={scripts[hook][:60]}"
+                                        f"npm lifecycle hook in {path}: {hook}={scripts[hook][:60]}"
                                     ),
                                 )
                             )
@@ -79,8 +78,7 @@ class BuildHooksDetector(Detector):
         escalate by returning the category.
         """
         has_exec = any(
-            e.kind == "exec" and "postinstall" in (e.target or "").lower()
-            for e in trace.events
+            e.kind == "exec" and "postinstall" in (e.target or "").lower() for e in trace.events
         )
         has_connect = any(e.kind == "connect" for e in trace.events)
         return [self.CATEGORY] if (has_exec and has_connect) else []

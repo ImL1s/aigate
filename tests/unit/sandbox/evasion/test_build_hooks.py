@@ -10,10 +10,7 @@ from aigate.sandbox.types import DynamicTrace, DynamicTraceEvent
 # Fixtures helpers
 # ---------------------------------------------------------------------------
 
-FIXTURE_DIR = (
-    __file__[: __file__.rfind("tests/unit")]
-    + "tests/fixtures/evasion/build_hooks"
-)
+FIXTURE_DIR = __file__[: __file__.rfind("tests/unit")] + "tests/fixtures/evasion/build_hooks"
 
 
 def _load(filename: str) -> str:

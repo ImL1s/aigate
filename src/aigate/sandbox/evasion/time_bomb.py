@@ -52,8 +52,7 @@ class TimeBombDetector(Detector):
                             category=self.CATEGORY,
                             severity=self.SEVERITY,
                             description=(
-                                f"time.time() gate in {path}: "
-                                f"future epoch {m.group('epoch')}"
+                                f"time.time() gate in {path}: future epoch {m.group('epoch')}"
                             ),
                         )
                     )
@@ -64,18 +63,12 @@ class TimeBombDetector(Detector):
                         RiskSignal(
                             category=self.CATEGORY,
                             severity=self.SEVERITY,
-                            description=(
-                                f"datetime gate in {path}: future year {year}"
-                            ),
+                            description=(f"datetime gate in {path}: future year {year}"),
                         )
                     )
         return signals
 
     def detect_dynamic(self, trace: DynamicTrace) -> list[str]:
         """Return CATEGORY if any trace event is a sleep longer than 30 seconds."""
-        long_sleeps = [
-            e
-            for e in trace.events
-            if e.kind == "sleep" and int(e.target or "0") > 30
-        ]
+        long_sleeps = [e for e in trace.events if e.kind == "sleep" and int(e.target or "0") > 30]
         return [self.CATEGORY] if long_sleeps else []

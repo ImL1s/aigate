@@ -39,9 +39,7 @@ class Detector(ABC):
         for klass in type(self).__mro__:
             if klass is Detector:
                 # Reached the base without finding a concrete value.
-                raise AttributeError(
-                    f"{type(self).__name__} must define a CATEGORY class constant"
-                )
+                raise AttributeError(f"{type(self).__name__} must define a CATEGORY class constant")
             if "CATEGORY" in klass.__dict__:
                 break  # concrete value found — all good
 
