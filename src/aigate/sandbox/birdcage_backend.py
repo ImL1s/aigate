@@ -1,4 +1,4 @@
-"""Birdcage subprocess wrapper (PRD v3.1 §3.1, Phase 1b).
+"""Birdcage subprocess wrapper (PRD v3.1 §3.1, Phase 1b/2).
 
 License boundary: Birdcage is GPL-3.0. We call it as a subprocess only —
 no imports, no linking, no bundled binary. The user installs birdcage
@@ -21,7 +21,10 @@ from collections.abc import Iterable
 
 from .canary import generate_canary_scheme
 from .errors import SandboxUnavailable
-from .runtime_select import detect_linux_connect_observer
+from .observers.base import FifoSink
+from .observers.canary import emit_canary_syscall
+from .observers.watchdog import ObserverWatchdog
+from .runtime_select import detect_linux_connect_observer, select_linux_observer
 from .secrets import redact_secrets
 from .types import (
     BIRDCAGE_EXPECTED_SKIPS,
@@ -30,6 +33,7 @@ from .types import (
     SandboxBackend,
     SandboxCoverage,
     SandboxRunRequest,
+    is_real_event,
 )
 
 BIRDCAGE_MIN_VERSION: tuple[int, int, int] = (0, 5, 0)
@@ -202,7 +206,7 @@ class BirdcageBackend(SandboxBackend):
         scratch_home: str,
     ) -> DynamicTrace:
         rule_args = self._build_rule_args(scratch_home)
-        argv = [
+        birdcage_argv = [
             birdcage,
             *rule_args,
             "--",
@@ -215,6 +219,26 @@ class BirdcageBackend(SandboxBackend):
             "--no-fund",
             "--no-save",
         ]
+
+        # --- Phase 2: observer selection (REV-C/D/F) ---
+        # On Linux, prepend the observer (strace) argv so strace becomes the
+        # PGID leader and birdcage is its child via ``--``.  Teardown uses
+        # ``os.killpg(observer_pgid)`` which cascades via PTRACE_O_TRACECLONE
+        # to the entire birdcage subtree (REV-C Principle 5).
+        observer = select_linux_observer() if platform.system() == "Linux" else None
+        sink: FifoSink | None = None
+        fifo_path = os.path.join(scratch_home, "observer.fifo")
+        observer_events: list[DynamicTraceEvent] = []
+        # raw_chunks: each appended item is one read() chunk; watchdog counts len().
+        raw_chunks: list[bytes] = []
+
+        if observer is not None:
+            sink = FifoSink(fifo_path)
+            sink.__enter__()  # os.mkfifo — creates the named pipe
+            argv = observer.argv_prefix(sink) + birdcage_argv
+        else:
+            argv = birdcage_argv
+
         env = {
             "HOME": scratch_home,
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
@@ -225,10 +249,17 @@ class BirdcageBackend(SandboxBackend):
             "NPM_CONFIG_REGISTRY": "http://127.0.0.1:1",
         }
         start_ms = int(time.monotonic() * 1000)
-        # start_new_session=True makes birdcage the leader of a fresh process
-        # group, so a timeout SIGKILL via killpg reaches every descendant
-        # (npm + postinstall.js + whatever it spawned). Without this, proc.kill()
-        # only hits the birdcage PID and npm survives the wall-clock cutoff.
+
+        # Emit canary BEFORE the main subprocess (REV-B).
+        # The canary subprocess opens OBSERVER_CANARY_MARKER which strace
+        # captures through the PGID trace, proving parser liveness.
+        if observer is not None and sink is not None:
+            emit_canary_syscall(sink)
+
+        # start_new_session=True:
+        # - observer present → strace is PGID leader (REV-C); birdcage is its
+        #   child.  ``os.killpg(observer_pgid)`` cascades via ``-f`` to birdcage.
+        # - observer absent → birdcage is PGID leader (Phase 1b behaviour).
         proc = await asyncio.create_subprocess_exec(
             *argv,
             env=env,
@@ -238,9 +269,15 @@ class BirdcageBackend(SandboxBackend):
             start_new_session=True,
         )
 
+        # REV-C: capture the PGID of the outermost process (observer or birdcage).
+        observer_pgid: int | None = None
+        if observer is not None:
+            with contextlib.suppress(OSError):
+                observer_pgid = os.getpgid(proc.pid)
+
+        scrub: list[str] = [canary.run_token] if canary.run_token else []
         synthetic_events: list[DynamicTraceEvent] = []
         stop = asyncio.Event()
-        scrub: list[str] = [canary.run_token] if canary.run_token else []
 
         # Emit the bootstrap synthetic event synchronously BEFORE any await —
         # Python 3.12+ asyncio can skip the probe task entirely if communicate()
@@ -283,7 +320,56 @@ class BirdcageBackend(SandboxBackend):
                 except TimeoutError:
                     continue
 
+        async def fifo_reader() -> None:
+            """Stream strace output from FIFO; drain remaining data after stop."""
+            if observer is None or sink is None:
+                return
+            loop = asyncio.get_event_loop()
+            fd = -1
+            try:
+                fd = await loop.run_in_executor(
+                    None, lambda: os.open(sink.argv_arg(), os.O_RDONLY | os.O_NONBLOCK)
+                )
+                # Streaming phase: process events while subprocess is running.
+                while not stop.is_set():
+                    try:
+                        chunk = await loop.run_in_executor(None, lambda: os.read(fd, 4096))
+                        if chunk:
+                            raw_chunks.append(chunk)
+                            ev = observer.parse_event(chunk, scrub)
+                            if ev is not None:
+                                observer_events.append(ev)
+                        else:
+                            # EOF — write end closed (observer exited early)
+                            return
+                    except BlockingIOError:
+                        await asyncio.sleep(0.01)
+                    except OSError:
+                        return
+                # Drain phase: stop is set; collect any bytes still buffered.
+                try:
+                    while True:
+                        chunk = await loop.run_in_executor(None, lambda: os.read(fd, 4096))
+                        if not chunk:
+                            break
+                        raw_chunks.append(chunk)
+                        ev = observer.parse_event(chunk, scrub)
+                        if ev is not None:
+                            observer_events.append(ev)
+                except (BlockingIOError, OSError):
+                    pass
+            finally:
+                if fd >= 0:
+                    with contextlib.suppress(OSError):
+                        os.close(fd)
+
         probe_task = asyncio.create_task(resource_probe())
+        reader_task = asyncio.create_task(fifo_reader()) if observer is not None else None
+        watchdog: ObserverWatchdog | None = None
+        watchdog_task: asyncio.Task | None = None  # type: ignore[type-arg]
+        if observer is not None:
+            watchdog = ObserverWatchdog(observer_events, raw_chunks, stop)
+            watchdog_task = asyncio.create_task(watchdog.run())
 
         timed_out = False
         try:
@@ -291,12 +377,15 @@ class BirdcageBackend(SandboxBackend):
                 proc.communicate(), timeout=request.timeout_s
             )
         except TimeoutError:
-            # Kill the entire process group so npm + postinstall children die
-            # alongside birdcage. Fall back to proc.kill() if killpg is not
-            # supported (e.g., pid already reaped, or Windows where getpgid
-            # is missing).
-            with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            # REV-C: kill observer PGID when present — strace is PGID leader and
+            # cascades SIGKILL via PTRACE_O_TRACECLONE (-f) to the birdcage subtree.
+            # Fall back to birdcage's own PGID when no observer (Phase 1b path).
+            if observer_pgid is not None:
+                with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+                    os.killpg(observer_pgid, signal.SIGKILL)
+            else:
+                with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             with contextlib.suppress(ProcessLookupError):
                 proc.kill()
             await proc.wait()
@@ -304,31 +393,40 @@ class BirdcageBackend(SandboxBackend):
             timed_out = True
         finally:
             stop.set()
-            # Never let a probe-task exception mask the real failure that
-            # brought us into `finally`. cancel() + shielded await + suppress
-            # guarantees teardown does not re-raise.
+            # Drain reader before cancelling so events are not lost.
+            if reader_task is not None:
+                with contextlib.suppress(asyncio.CancelledError, Exception, TimeoutError):
+                    await asyncio.wait_for(asyncio.shield(reader_task), timeout=2.0)
+                reader_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await reader_task
+            # Cancel remaining background tasks.
             probe_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await probe_task
+            if watchdog_task is not None:
+                watchdog_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await watchdog_task
+            # Release FIFO and observer resources.
+            if sink is not None:
+                sink.cleanup()
+            if observer is not None:
+                await observer.cleanup()
 
         duration_ms = int(time.monotonic() * 1000) - start_ms
 
+        # Parse birdcage stdout JSON-lines (present on all platforms; strace
+        # output arrives via FIFO and is already in observer_events).
         raw_lines = stdout_b.decode("utf-8", errors="replace").splitlines()
         parsed_events, events_parsed, raw_lines_seen = parse_birdcage_stream(raw_lines, scrub)
         err_msg, drift_cov = classify_parse_quality(events_parsed, raw_lines_seen)
 
-        all_events = synthetic_events + parsed_events
+        all_events = synthetic_events + parsed_events + observer_events
+        observed: set[SandboxCoverage] = {SandboxCoverage.FS_WRITES}
         skipped_unexpected: set[SandboxCoverage] = set()
         if drift_cov is not None:
             skipped_unexpected.add(drift_cov)
-        # Phase 1b Linux-light: the connect-observer is gated in
-        # check_available() but never wired into argv yet (Phase 2). Record
-        # NETWORK_CAPTURE as explicitly unobserved so the policy layer always
-        # sees Linux-light runs as network-unchecked and escalates via
-        # has_observation_failure() — no reliance on the parser-0-lines
-        # side effect to surface the gap (reviewer P1).
-        if platform.system() == "Linux":
-            skipped_unexpected.add(SandboxCoverage.NETWORK_CAPTURE)
 
         error: str | None = None
         if timed_out:
@@ -339,13 +437,52 @@ class BirdcageBackend(SandboxBackend):
         elif err_msg:
             error = err_msg
 
+        # REV-F: evidence-based NETWORK_CAPTURE coverage decision (Phase 2).
+        # Replaces Phase 1b's unconditional ``skipped_unexpected.add(NETWORK_CAPTURE)``
+        # on Linux.  Every branch is fail-closed except the final ``else`` which
+        # requires ≥1 real event (canary excluded) from the observer stream.
+        if platform.system() == "Linux":
+            real_event_count = sum(1 for e in all_events if is_real_event(e))
+            observer_rc = proc.returncode if proc.returncode is not None else 0
+            # Observer crashed: strace exited non-zero and produced zero events
+            # (strace propagates birdcage's exit code; non-zero + zero events
+            # means strace itself failed, e.g. ptrace_scope=2 refused attach).
+            observer_crashed = (
+                observer is not None and observer_rc != 0 and real_event_count == 0
+            )
+            stuck_observer_detected = watchdog.stuck if watchdog is not None else False
+
+            if observer is None:
+                # No observer available (strace not on PATH etc.).
+                skipped_unexpected.add(SandboxCoverage.NETWORK_CAPTURE)
+                error = error or "No Linux connect-observer available (install strace)"
+            elif timed_out or observer_crashed:
+                # REV-F: crash or timeout → fail-closed regardless of partial events.
+                skipped_unexpected.add(SandboxCoverage.NETWORK_CAPTURE)
+                if observer_crashed and not timed_out:
+                    error = error or f"observer_crash: {observer.name} rc={observer_rc}"
+            elif stuck_observer_detected:
+                # REV-A drift-aware watchdog tripped (fully-silent or drift-masked).
+                skipped_unexpected.add(SandboxCoverage.NETWORK_CAPTURE)
+                error = error or "stuck_observer: drift-aware watchdog tripped"
+            elif real_event_count < 1:
+                # REV-B + REV-F: observer alive but zero real events — fail-closed.
+                # Canary event (source="observer_canary") excluded by is_real_event().
+                skipped_unexpected.add(SandboxCoverage.NETWORK_CAPTURE)
+                error = error or "observer_silent: no real events observed (canary missing)"
+            else:
+                # Observer produced ≥1 real event — coverage confirmed.
+                observed.add(SandboxCoverage.NETWORK_CAPTURE)
+                observed.add(SandboxCoverage.DNS)
+                observed.add(SandboxCoverage.PROCESS_TREE)
+
         return DynamicTrace(
             ran=True,
             runtime="birdcage",
             duration_ms=duration_ms,
             timeout=timed_out,
             events=all_events,
-            observed={SandboxCoverage.FS_WRITES},
+            observed=observed,
             skipped_expected=set(BIRDCAGE_EXPECTED_SKIPS),
             skipped_unexpected=skipped_unexpected,
             canary=canary,
