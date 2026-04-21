@@ -168,6 +168,34 @@ class TestReportFromCached:
         assert rebuilt.prefilter.passed is True
         assert rebuilt.cached is True
 
+    def test_tolerates_missing_required_fields(self, tmp_path: Path):
+        """Schema drift (opposite direction): if an older cache entry LACKS a
+        field the current dataclass now requires, _from_dict must return None
+        (and the list-comprehension filter must drop it) rather than raising
+        TypeError through the hook's broad except → silent fail-open."""
+        cached = {
+            "package": {"name": "p", "version": "1.0.0", "ecosystem": "pypi"},
+            "prefilter": {
+                "passed": True,
+                "reason": "safe",
+                "risk_level": "none",
+                "risk_signals": [],
+                "needs_ai_review": False,
+            },
+            "enrichment": {
+                # SecurityMention normally requires 'title'; omit it.
+                "security_mentions": [{"url": "http://x", "snippet": "s"}],
+                # KnownVulnerability normally requires 'id' + 'summary'; omit summary.
+                "known_vulnerabilities": [{"id": "CVE-1"}],
+            },
+        }
+        fallback = PackageInfo(name="p", version="1.0.0", ecosystem="pypi")
+        rebuilt = report_from_cached(cached, fallback_package=fallback, total_latency_ms=0)
+        # Incompatible entries are dropped, leaving empty lists — no exception.
+        assert rebuilt.enrichment is not None
+        assert rebuilt.enrichment.security_mentions == []
+        assert rebuilt.enrichment.known_vulnerabilities == []
+
     def test_tolerates_unknown_enrichment_fields(self, tmp_path: Path):
         """Schema drift: an older cache file with now-removed fields must not
         raise TypeError in ProvenanceInfo/SecurityMention/KnownVulnerability

@@ -58,6 +58,11 @@ MAX_CRATES_ARCHIVE_SIZE = 200 * 1024 * 1024  # 200MB
 # raise the ceiling via AIGATE_DOWNLOAD_TIMEOUT_SECONDS without recompiling.
 # Registry-metadata calls are NOT affected — they use the 30s literal.
 _DEFAULT_ARCHIVE_TIMEOUT = 30
+# Hard ceiling on archive-download timeout. Without this an attacker who can
+# set env (e.g. compromised CI config) could set the override to 999999 and
+# reopen the 120s-stall DoS window this PR was closing. 300s is enough for
+# legitimate multi-hundred-MB ML wheels on slow links.
+_MAX_ARCHIVE_TIMEOUT = 300
 
 
 def _archive_timeout() -> int:
@@ -65,7 +70,8 @@ def _archive_timeout() -> int:
 
     Reads ``AIGATE_DOWNLOAD_TIMEOUT_SECONDS`` each call so tests (and env
     changes at the container/CI layer) take effect without process restart.
-    Falls back to the 30s default on unset, non-int, or <1 values.
+    Falls back to the 30s default on unset, non-int, or <1 values. Clamps
+    user overrides at _MAX_ARCHIVE_TIMEOUT to preserve the stall-DoS ceiling.
     """
     raw = os.environ.get("AIGATE_DOWNLOAD_TIMEOUT_SECONDS")
     if not raw:
@@ -76,7 +82,7 @@ def _archive_timeout() -> int:
         return _DEFAULT_ARCHIVE_TIMEOUT
     if val < 1:
         return _DEFAULT_ARCHIVE_TIMEOUT
-    return val
+    return min(val, _MAX_ARCHIVE_TIMEOUT)
 
 
 def _jsr_to_npm_name(name: str) -> str:

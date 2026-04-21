@@ -40,13 +40,19 @@ def _cache_disabled() -> bool:
 def _from_dict(cls, data: dict):
     """Construct a dataclass, silently dropping unknown keys.
 
-    Tolerates schema drift: an older cache entry containing fields that the
-    current dataclass no longer defines must NOT crash report_from_cached, or
-    a TypeError would bubble up through the hook's broad except and silently
-    let the install proceed (fail-open on schema change).
+    Tolerates two-way schema drift: older cache entries may contain fields the
+    current class dropped (filtered via ``__dataclass_fields__``), or may lack
+    fields the current class now requires (caught as TypeError and downgraded
+    to None). Either way the caller treats the result as "not in cache" rather
+    than letting the hook's broad except swallow a TypeError and fail-open.
     """
     fields = cls.__dataclass_fields__
-    return cls(**{k: v for k, v in data.items() if k in fields})
+    filtered = {k: v for k, v in data.items() if k in fields}
+    try:
+        return cls(**filtered)
+    except TypeError:
+        logger.debug("Skipping cached %s — incompatible with current schema", cls.__name__)
+        return None
 
 
 def _cache_dir(config_cache_dir: str) -> Path:
@@ -234,13 +240,15 @@ def report_from_cached(
             expected_capabilities=enrichment_data.get("expected_capabilities", []),
             doc_snippets=enrichment_data.get("doc_snippets", []),
             security_mentions=[
-                _from_dict(SecurityMention, mention)
+                m_obj
                 for mention in enrichment_data.get("security_mentions", [])
+                if (m_obj := _from_dict(SecurityMention, mention)) is not None
             ],
             author_info=enrichment_data.get("author_info", ""),
             known_vulnerabilities=[
-                _from_dict(KnownVulnerability, vuln)
+                v_obj
                 for vuln in enrichment_data.get("known_vulnerabilities", [])
+                if (v_obj := _from_dict(KnownVulnerability, vuln)) is not None
             ],
             scorecard=scorecard,
             provenance=provenance,

@@ -708,7 +708,7 @@ class TestArchiveTimeout:
         monkeypatch.delenv("AIGATE_DOWNLOAD_TIMEOUT_SECONDS", raising=False)
         assert _archive_timeout() == 30
 
-    @pytest.mark.parametrize("raw,expected", [("120", 120), ("1", 1), ("600", 600)])
+    @pytest.mark.parametrize("raw,expected", [("120", 120), ("1", 1), ("300", 300)])
     def test_valid_override(self, monkeypatch, raw: str, expected: int):
         monkeypatch.setenv("AIGATE_DOWNLOAD_TIMEOUT_SECONDS", raw)
         assert _archive_timeout() == expected
@@ -717,3 +717,9 @@ class TestArchiveTimeout:
     def test_invalid_or_nonpositive_falls_back_to_default(self, monkeypatch, raw: str):
         monkeypatch.setenv("AIGATE_DOWNLOAD_TIMEOUT_SECONDS", raw)
         assert _archive_timeout() == 30
+
+    @pytest.mark.parametrize("raw", ["301", "600", "999", "999999"])
+    def test_clamped_to_max(self, monkeypatch, raw: str):
+        """Prevent an attacker-controlled env from reopening the 120s-stall DoS."""
+        monkeypatch.setenv("AIGATE_DOWNLOAD_TIMEOUT_SECONDS", raw)
+        assert _archive_timeout() == 300
