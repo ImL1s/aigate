@@ -447,9 +447,7 @@ class BirdcageBackend(SandboxBackend):
             # Observer crashed: strace exited non-zero and produced zero events
             # (strace propagates birdcage's exit code; non-zero + zero events
             # means strace itself failed, e.g. ptrace_scope=2 refused attach).
-            observer_crashed = (
-                observer is not None and observer_rc != 0 and real_event_count == 0
-            )
+            observer_crashed = observer is not None and observer_rc != 0 and real_event_count == 0
             stuck_observer_detected = watchdog.stuck if watchdog is not None else False
 
             if observer is None:

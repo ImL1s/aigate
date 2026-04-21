@@ -70,9 +70,7 @@ def _detect_orphan_clones(
     This mirrors the logic that Task 2.6's watchdog/fork-race detector
     implements post-run.
     """
-    child_pids_with_exec: set[int] = {
-        e.pid for e in events if e.kind in ("exec", "execve")
-    }
+    child_pids_with_exec: set[int] = {e.pid for e in events if e.kind in ("exec", "execve")}
     violations: list[DynamicTraceEvent] = []
     for ev in events:
         if ev.kind != "clone":
@@ -146,9 +144,7 @@ class TestCloneParsing:
     def test_instance_parse_event_also_yields_clone(self):
         """StraceObserver.parse_event() (stateful) produces clone events."""
         observer = StraceObserver()
-        ev = observer.parse_event(
-            b"1234 clone(child_stack=NULL, flags=SIGCHLD) = 8888\n", []
-        )
+        ev = observer.parse_event(b"1234 clone(child_stack=NULL, flags=SIGCHLD) = 8888\n", [])
         assert ev is not None
         assert ev.kind == "clone"
         assert "8888" in ev.target

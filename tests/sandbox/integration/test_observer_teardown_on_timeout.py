@@ -44,11 +44,16 @@ pytestmark = pytest.mark.skipif(
 def _strace_argv(fifo_path: str) -> list[str]:
     """strace argv tracing a long-running python3 sleep (10s)."""
     return [
-        "strace", "-f",
-        "-e", "trace=connect,openat,write,execve,clone",
-        "-o", fifo_path,
+        "strace",
+        "-f",
+        "-e",
+        "trace=connect,openat,write,execve,clone",
+        "-o",
+        fifo_path,
         "--",
-        "python3", "-c", "import time; time.sleep(10)",
+        "python3",
+        "-c",
+        "import time; time.sleep(10)",
     ]
 
 
@@ -102,7 +107,8 @@ class TestPgidLeadership:
         os.mkfifo(fifo_path)
 
         threading.Thread(
-            target=lambda: open(fifo_path, "rb").read(), daemon=True  # noqa: WPS515
+            target=lambda: open(fifo_path, "rb").read(),
+            daemon=True,  # noqa: WPS515
         ).start()
 
         proc = subprocess.Popen(
@@ -141,7 +147,8 @@ class TestKillpgCascade:
         os.mkfifo(fifo_path)
 
         threading.Thread(
-            target=lambda: open(fifo_path, "rb").read(), daemon=True  # noqa: WPS515
+            target=lambda: open(fifo_path, "rb").read(),
+            daemon=True,  # noqa: WPS515
         ).start()
 
         proc = subprocess.Popen(
@@ -177,7 +184,8 @@ class TestKillpgCascade:
         os.mkfifo(fifo_path)
 
         threading.Thread(
-            target=lambda: open(fifo_path, "rb").read(), daemon=True  # noqa: WPS515
+            target=lambda: open(fifo_path, "rb").read(),
+            daemon=True,  # noqa: WPS515
         ).start()
 
         proc = subprocess.Popen(
@@ -196,9 +204,7 @@ class TestKillpgCascade:
         elapsed = time.monotonic() - start
 
         # SIGKILL should take effect in < 2 s (in practice < 100 ms)
-        assert elapsed < 2.0, (
-            f"killpg took {elapsed:.2f}s to kill strace — expected < 2 s"
-        )
+        assert elapsed < 2.0, f"killpg took {elapsed:.2f}s to kill strace — expected < 2 s"
 
     def test_process_not_found_after_killpg(self, tmp_path):
         """After killpg, os.getpgid(proc.pid) raises ProcessLookupError."""
@@ -206,7 +212,8 @@ class TestKillpgCascade:
         os.mkfifo(fifo_path)
 
         threading.Thread(
-            target=lambda: open(fifo_path, "rb").read(), daemon=True  # noqa: WPS515
+            target=lambda: open(fifo_path, "rb").read(),
+            daemon=True,  # noqa: WPS515
         ).start()
 
         proc = subprocess.Popen(

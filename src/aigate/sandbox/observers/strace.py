@@ -91,9 +91,7 @@ _RE_INET4 = re.compile(
 )
 
 # IPv6 sockaddr (port only — IPv6 addr text extraction is complex/optional)
-_RE_INET6 = re.compile(
-    r"sa_family=AF_INET6[^,}]*,\s*sin6_port=htons\((\d+)\)"
-)
+_RE_INET6 = re.compile(r"sa_family=AF_INET6[^,}]*,\s*sin6_port=htons\((\d+)\)")
 
 # AF_UNIX sockaddr
 _RE_UNIX = re.compile(r'sa_family=AF_UNIX,\s*sun_path="([^"]+)"')
@@ -102,7 +100,7 @@ _RE_UNIX = re.compile(r'sa_family=AF_UNIX,\s*sun_path="([^"]+)"')
 # dirfd may be AT_FDCWD or a numeric fd (possibly negative).
 _RE_OPENAT = re.compile(
     r'(?:AT_FDCWD|-?\d+),\s*"([^"]+)"'
-    r'(?:,\s*([A-Z_0-9|]+))?'
+    r"(?:,\s*([A-Z_0-9|]+))?"
 )
 
 # execve first arg: "/path"
@@ -117,9 +115,7 @@ _RE_WRITE_FD = re.compile(r"^\s*(\d+),")
 _RE_RETVAL_INT = re.compile(r"^(-?\d+)")
 
 # Flags indicating a write-mode open
-_WRITE_FLAGS: frozenset[str] = frozenset(
-    {"O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC", "O_APPEND"}
-)
+_WRITE_FLAGS: frozenset[str] = frozenset({"O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC", "O_APPEND"})
 
 
 # ---------------------------------------------------------------------------
@@ -132,9 +128,7 @@ def _pid_from_match(m: re.Match[str]) -> int:
     return int(m.group(1) or m.group(2))
 
 
-def _parse_connect(
-    pid: int, args: str, ts_ms: int, scrub: list[str]
-) -> DynamicTraceEvent | None:
+def _parse_connect(pid: int, args: str, ts_ms: int, scrub: list[str]) -> DynamicTraceEvent | None:
     """Map connect(fd, sockaddr, len) → connect or dns event."""
     # AF_INET
     m4 = _RE_INET4.search(args)
@@ -195,9 +189,7 @@ def _parse_connect(
     )
 
 
-def _parse_openat(
-    pid: int, args: str, ts_ms: int, scrub: list[str]
-) -> DynamicTraceEvent | None:
+def _parse_openat(pid: int, args: str, ts_ms: int, scrub: list[str]) -> DynamicTraceEvent | None:
     """Map openat(dirfd, path, flags) → open / write / observer_canary event."""
     m = _RE_OPENAT.search(args)
     if m is None:
@@ -229,9 +221,7 @@ def _parse_openat(
     )
 
 
-def _parse_execve(
-    pid: int, args: str, ts_ms: int, scrub: list[str]
-) -> DynamicTraceEvent | None:
+def _parse_execve(pid: int, args: str, ts_ms: int, scrub: list[str]) -> DynamicTraceEvent | None:
     """Map execve(path, argv, envp) → exec event."""
     pm = _RE_EXECVE_PATH.match(args)
     if pm is None:
@@ -257,9 +247,7 @@ def _parse_execve(
     )
 
 
-def _parse_write(
-    pid: int, args: str, ts_ms: int, scrub: list[str]
-) -> DynamicTraceEvent:
+def _parse_write(pid: int, args: str, ts_ms: int, scrub: list[str]) -> DynamicTraceEvent:
     """Map write(fd, buf, count) → write event with target="fd=N"."""
     fm = _RE_WRITE_FD.match(args)
     fd = fm.group(1) if fm else "?"
@@ -508,9 +496,7 @@ class StraceObserver(Observer):
             if sm is None:
                 return None
             ts_ms = int(time.monotonic() * 1000)
-            return _dispatch(
-                pid, syscall, sm.group(2), sm.group(3).strip(), ts_ms, scrub_list
-            )
+            return _dispatch(pid, syscall, sm.group(2), sm.group(3).strip(), ts_ms, scrub_list)
 
         # --- Unfinished syscall ---
         unfinished_m = _RE_UNFINISHED.match(tail)

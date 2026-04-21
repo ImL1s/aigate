@@ -68,15 +68,19 @@ FIXTURE_PACKAGE: str = "lodash@4.17.21"
 #: strace flags that mirror StraceObserver.argv_prefix() exactly.
 #: -o /dev/null avoids FIFO I/O skewing the timing measurement.
 _STRACE_FLAGS: list[str] = [
-    "strace", "-f",
-    "-e", "trace=connect,openat,write,execve,clone",
-    "-o", "/dev/null",
+    "strace",
+    "-f",
+    "-e",
+    "trace=connect,openat,write,execve,clone",
+    "-o",
+    "/dev/null",
     "--",
 ]
 
 #: npm install flags: offline-prefer (uses ~/.npm cache), no audit noise.
 _NPM_FLAGS: list[str] = [
-    "npm", "install",
+    "npm",
+    "install",
     "--prefer-offline",
     "--no-audit",
     "--no-fund",
@@ -213,8 +217,7 @@ class TestMonorepoPerfRegression:
 
         if t_traced == float("inf"):
             pytest.skip(
-                f"traced npm install timed out after {_RUN_TIMEOUT_S}s — "
-                "cannot compute ratio"
+                f"traced npm install timed out after {_RUN_TIMEOUT_S}s — cannot compute ratio"
             )
 
         if ratio > RATIO_CEILING:

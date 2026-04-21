@@ -70,8 +70,13 @@ def _mock_strace_observer(real_event: DynamicTraceEvent | None = None) -> MagicM
     obs.sink_kind = "fifo"
     obs.argv_prefix = Mock(
         return_value=[
-            "strace", "-f", "-e", "trace=connect,openat,write,execve,clone",
-            "-o", "/tmp/aigate-sandbox-test/observer.fifo", "--",
+            "strace",
+            "-f",
+            "-e",
+            "trace=connect,openat,write,execve,clone",
+            "-o",
+            "/tmp/aigate-sandbox-test/observer.fifo",
+            "--",
         ]
     )
     obs.check_available.return_value = True
@@ -114,6 +119,10 @@ async def _run_with_mock(proc: MagicMock, timeout_s: int = 10) -> object:
         # Phase 2: select_linux_observer → None keeps existing tests hermetic
         # (observer is None path = Phase 1b behaviour on any platform).
         patch("aigate.sandbox.birdcage_backend.select_linux_observer", return_value=None),
+        # Default platform to Darwin so hermetic tests don't trip the Linux
+        # REV-F "no observer → error" branch unless they opt into Linux via
+        # _linux_observer_cm. Individual Linux-path tests override this.
+        patch("aigate.sandbox.birdcage_backend.platform.system", return_value="Darwin"),
     ):
         backend = BirdcageBackend()
         return await backend.run(request)
@@ -160,9 +169,7 @@ async def test_happy_path_no_unexpected_skips():
 
 async def test_happy_path_linux_observer_network_capture_observed():
     """Phase 2 REV-F: Linux + strace observer + ≥1 real event → NETWORK_CAPTURE in observed."""
-    real_event = DynamicTraceEvent(
-        kind="connect", ts_ms=1, pid=42, process="", target="1.2.3.4:80"
-    )
+    real_event = DynamicTraceEvent(kind="connect", ts_ms=1, pid=42, process="", target="1.2.3.4:80")
     mock_observer = _mock_strace_observer(real_event)
 
     # os.read: first call (drain phase) returns strace bytes; second raises BlockingIOError.
@@ -173,7 +180,7 @@ async def test_happy_path_linux_observer_network_capture_observed():
         if _read_calls[0] == 1:
             # RFC 5737 TEST-NET-1 connect event (non-routable)
             return (
-                b'1234 connect(4, {sa_family=AF_INET, sin_port=htons(80),'
+                b"1234 connect(4, {sa_family=AF_INET, sin_port=htons(80),"
                 b' sin_addr=inet_addr("192.0.2.1")}, 16) = 0\n'
             )
         raise BlockingIOError
@@ -307,6 +314,7 @@ async def test_teardown_kills_observer_pgid_cascades_to_birdcage():
     strace is the PGID leader (start_new_session=True).  SIGKILL on observer_pgid
     cascades via PTRACE_O_TRACECLONE (-f) to the entire birdcage subtree.
     """
+
     async def _slow_communicate():
         await asyncio.sleep(30)
         return b"", b""

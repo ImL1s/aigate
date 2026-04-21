@@ -94,9 +94,7 @@ def test_argv_prefix_traces_execve_for_descendant_coverage():
     argv = _argv()
     e_idx = argv.index("-e")
     trace_arg = argv[e_idx + 1]
-    assert "execve" in trace_arg, (
-        f"execve must be in -e trace= list; got: {trace_arg!r}"
-    )
+    assert "execve" in trace_arg, f"execve must be in -e trace= list; got: {trace_arg!r}"
 
 
 def test_argv_prefix_traces_clone_for_fork_race_detector():
@@ -104,9 +102,7 @@ def test_argv_prefix_traces_clone_for_fork_race_detector():
     argv = _argv()
     e_idx = argv.index("-e")
     trace_arg = argv[e_idx + 1]
-    assert "clone" in trace_arg, (
-        f"clone must be in -e trace= list; got: {trace_arg!r}"
-    )
+    assert "clone" in trace_arg, f"clone must be in -e trace= list; got: {trace_arg!r}"
 
 
 def test_argv_prefix_traces_connect_for_network_capture():

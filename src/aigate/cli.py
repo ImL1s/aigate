@@ -1610,10 +1610,7 @@ def doctor(ctx, sandbox_preflight: bool, sandbox_required: bool):
                     "2": "hardened (strace will fail-closed; Phase 2.5 bpftrace needed)",
                     "3": "locked (admin-set; strace blocked)",
                 }
-                console.print(
-                    f"  ptrace_scope: {_scope}  "
-                    f"({_scope_desc.get(_scope, 'unknown')})"
-                )
+                console.print(f"  ptrace_scope: {_scope}  ({_scope_desc.get(_scope, 'unknown')})")
             except (OSError, FileNotFoundError):
                 console.print("  ptrace_scope: N/A")
 

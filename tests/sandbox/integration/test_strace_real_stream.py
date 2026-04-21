@@ -34,10 +34,7 @@ _IP = "192.0.2.1"
 _PORT = 80
 
 # Python one-liner: attempt connect, swallow the expected ECONNREFUSED/timeout
-_CONNECT_CMD = (
-    f"import socket; s=socket.socket(); s.settimeout(0.5); "
-    f"s.connect(('{_IP}', {_PORT}))"
-)
+_CONNECT_CMD = f"import socket; s=socket.socket(); s.settimeout(0.5); s.connect(('{_IP}', {_PORT}))"
 
 
 # ---------------------------------------------------------------------------
@@ -62,11 +59,16 @@ def _run_strace_fifo(tmp_path, python_cmd: str) -> bytes:
 
     subprocess.run(
         [
-            "strace", "-f",
-            "-e", "trace=connect,openat,write,execve,clone",
-            "-o", fifo_path,
+            "strace",
+            "-f",
+            "-e",
+            "trace=connect,openat,write,execve,clone",
+            "-o",
+            fifo_path,
             "--",
-            "python3", "-c", python_cmd,
+            "python3",
+            "-c",
+            python_cmd,
         ],
         timeout=20,
         capture_output=True,
@@ -114,8 +116,7 @@ class TestStraceRealStream:
         matching = [e for e in events if e.kind == "connect" and _IP in e.target]
         assert matching, f"No connect event targeting {_IP!r}"
         assert any(f":{_PORT}" in e.target for e in matching), (
-            f"Expected port {_PORT} in connect target; "
-            f"got targets: {[e.target for e in matching]}"
+            f"Expected port {_PORT} in connect target; got targets: {[e.target for e in matching]}"
         )
 
     def test_execve_event_emitted(self, tmp_path):
@@ -123,9 +124,7 @@ class TestStraceRealStream:
         data = _run_strace_fifo(tmp_path, "pass")
         events = _parse_all(data)
         exec_events = [e for e in events if e.kind == "exec"]
-        assert exec_events, (
-            f"Expected ≥1 exec event; got kinds: {[e.kind for e in events][:15]}"
-        )
+        assert exec_events, f"Expected ≥1 exec event; got kinds: {[e.kind for e in events][:15]}"
 
     def test_openat_events_emitted(self, tmp_path):
         """strace emits open/write events from python's module imports."""
@@ -157,9 +156,7 @@ class TestStraceRealStream:
             if ev is not None:
                 events.append(ev)
 
-        assert events, (
-            "StraceObserver.parse_event() produced 0 events from real strace output"
-        )
+        assert events, "StraceObserver.parse_event() produced 0 events from real strace output"
         kinds = {e.kind for e in events}
         assert kinds, "Events have no kinds"
 
@@ -170,6 +167,4 @@ class TestStraceRealStream:
         connect_events = [e for e in events if e.kind == "connect" and _IP in e.target]
         assert connect_events, f"No connect event for {_IP}"
         ev = connect_events[0]
-        assert "connect" in ev.raw, (
-            f"Expected 'connect' in event.raw; got: {ev.raw!r}"
-        )
+        assert "connect" in ev.raw, f"Expected 'connect' in event.raw; got: {ev.raw!r}"

@@ -84,6 +84,7 @@ def test_select_linux_observer_returns_none_when_no_observer(monkeypatch):
 
 def test_select_linux_observer_returns_none_for_bpftrace_phase25_scope(monkeypatch):
     """bpftrace is Phase 2.5 scope — select_linux_observer returns None even if found."""
+
     def _which(name):
         return f"/usr/bin/{name}" if name == "bpftrace" else None
 
@@ -94,6 +95,7 @@ def test_select_linux_observer_returns_none_for_bpftrace_phase25_scope(monkeypat
 
 def test_select_linux_observer_returns_strace_observer_when_strace_present(monkeypatch):
     """When strace is on PATH and StraceObserver is importable, returns instance."""
+
     def _which(name):
         return f"/usr/bin/{name}" if name == "strace" else None
 

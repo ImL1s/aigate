@@ -43,9 +43,7 @@ class _MinimalObserver(Observer):
     def argv_prefix(self, sink: ObserverSink) -> list[str]:
         return ["test-observer", "--output", sink.argv_arg()]
 
-    def parse_event(
-        self, raw: bytes, scrub: Iterable[str]
-    ) -> DynamicTraceEvent | None:
+    def parse_event(self, raw: bytes, scrub: Iterable[str]) -> DynamicTraceEvent | None:
         # Per-instance buffer to assert no module-global state
         if not hasattr(self, "_buf"):
             self._buf: bytes = b""
@@ -103,6 +101,7 @@ class TestObserverABC:
 
             async def cleanup(self) -> None:
                 pass
+
             # argv_prefix NOT defined → abstract
 
         with pytest.raises(TypeError):
@@ -125,6 +124,7 @@ class TestObserverABC:
 
             async def cleanup(self) -> None:
                 pass
+
             # parse_event NOT defined → abstract
 
         with pytest.raises(TypeError):
@@ -146,6 +146,7 @@ class TestObserverABC:
 
             async def cleanup(self) -> None:
                 pass
+
             # sink_kind property NOT defined → abstract
 
         with pytest.raises(TypeError):
@@ -168,6 +169,7 @@ class TestObserverABC:
 
             async def cleanup(self) -> None:
                 pass
+
             # check_available NOT defined → abstract
 
         with pytest.raises(TypeError):
@@ -190,6 +192,7 @@ class TestObserverABC:
 
             def check_available(self) -> bool:
                 return False
+
             # cleanup NOT defined → abstract
 
         with pytest.raises(TypeError):
@@ -246,9 +249,10 @@ class TestObserverABC:
 
     def test_sink_kind_is_property(self) -> None:
         # sink_kind must be a property, not a plain attribute
-        assert isinstance(Observer.__dict__.get("sink_kind") or
-                          _MinimalObserver.__dict__.get("sink_kind"),
-                          property)
+        assert isinstance(
+            Observer.__dict__.get("sink_kind") or _MinimalObserver.__dict__.get("sink_kind"),
+            property,
+        )
 
     # -------------------------------------------------------------------
     # coverage class attribute

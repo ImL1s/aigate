@@ -63,9 +63,7 @@ def _check_prereqs():
 
 
 def _make_tarball(tmp_path) -> str:
-    pkg_json = json.dumps(
-        {"name": "aigate-e2e-no-observer-pkg", "version": "1.0.0"}
-    ).encode()
+    pkg_json = json.dumps({"name": "aigate-e2e-no-observer-pkg", "version": "1.0.0"}).encode()
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tf:
         info = tarfile.TarInfo(name="package/package.json")
@@ -145,9 +143,7 @@ class TestE2EObserverMissing:
             timeout_s=60,
         )
         trace = await BirdcageBackend().run(request)
-        assert trace.error is not None, (
-            "trace.error must be set when observer is missing; got None"
-        )
+        assert trace.error is not None, "trace.error must be set when observer is missing; got None"
         assert "observer" in trace.error.lower() or "strace" in trace.error.lower(), (
             f"trace.error should mention the missing observer; got: {trace.error!r}"
         )

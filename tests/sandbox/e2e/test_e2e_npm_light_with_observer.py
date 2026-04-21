@@ -149,9 +149,7 @@ class TestE2ENpmLightWithObserver:
         trace = await BirdcageBackend().run(request)
 
         # At minimum the canary event must be present (source="observer_canary")
-        canary_events = [
-            e for e in trace.events if getattr(e, "source", None) == "observer_canary"
-        ]
+        canary_events = [e for e in trace.events if getattr(e, "source", None) == "observer_canary"]
         assert canary_events, (
             "Expected ≥1 observer_canary event proving parser liveness; "
             f"event kinds: {[e.kind for e in trace.events]}"
@@ -170,13 +168,9 @@ class TestE2ENpmLightWithObserver:
         )
         trace = await BirdcageBackend().run(request)
 
-        canary_events = [
-            e for e in trace.events if getattr(e, "source", None) == "observer_canary"
-        ]
+        canary_events = [e for e in trace.events if getattr(e, "source", None) == "observer_canary"]
         for ev in canary_events:
-            assert not is_real_event(ev), (
-                f"observer_canary event must not be real; got: {ev}"
-            )
+            assert not is_real_event(ev), f"observer_canary event must not be real; got: {ev}"
 
     @pytest.mark.asyncio
     async def test_network_capture_in_observed_when_real_events_seen(self, tmp_path):
@@ -212,9 +206,7 @@ class TestE2ENpmLightWithObserver:
             timeout_s=60,
         )
         trace = await BirdcageBackend().run(request)
-        assert not trace.timeout, (
-            f"Unexpected timeout on fast e2e package; error={trace.error!r}"
-        )
+        assert not trace.timeout, f"Unexpected timeout on fast e2e package; error={trace.error!r}"
 
     @pytest.mark.asyncio
     async def test_skipped_unexpected_empty_on_clean_run(self, tmp_path):

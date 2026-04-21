@@ -96,7 +96,7 @@ class TestLogicalEventRedaction:
         # While IPs are not typically secrets, the scrub plumbing must fire
         secret = "192.0.2"
         line = (
-            '1234 connect(4, {sa_family=AF_INET, sin_port=htons(80), '
+            "1234 connect(4, {sa_family=AF_INET, sin_port=htons(80), "
             'sin_addr=inet_addr("192.0.2.1")}, 16) = 0'
         )
         ev, _ = parse_strace_logical_event(_line(line), [secret])
@@ -117,9 +117,7 @@ class TestObserverParseEventRedaction:
         observer = StraceObserver()
         ev = observer.parse_event(_line(line), [secret])
         assert ev is not None
-        assert secret not in ev.target, (
-            f"Secret leaked in target after parse_event: {ev.target!r}"
-        )
+        assert secret not in ev.target, f"Secret leaked in target after parse_event: {ev.target!r}"
 
     def test_raw_field_redacted_via_scrub_list(self):
         """StraceObserver.parse_event() must apply scrub to raw field."""
@@ -128,9 +126,7 @@ class TestObserverParseEventRedaction:
         observer = StraceObserver()
         ev = observer.parse_event(_line(line), [secret])
         assert ev is not None
-        assert secret not in ev.raw, (
-            f"Secret leaked in raw after parse_event: {ev.raw!r}"
-        )
+        assert secret not in ev.raw, f"Secret leaked in raw after parse_event: {ev.raw!r}"
 
     def test_empty_scrub_is_safe(self):
         """Empty scrub list must not crash or alter events."""
@@ -177,7 +173,7 @@ class TestObserverParseEventRedaction:
         assert ev1 is None  # pending; no event yet
 
         # Feed resumed line
-        resumed = '1234 <... openat resumed> , O_RDONLY) = 3\n'
+        resumed = "1234 <... openat resumed> , O_RDONLY) = 3\n"
         ev2 = observer.parse_event(resumed.encode(), [secret])
         if ev2 is not None:
             # If reassembly produced an event, secret must be redacted

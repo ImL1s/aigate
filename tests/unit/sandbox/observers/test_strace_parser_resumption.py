@@ -64,7 +64,7 @@ class TestConnectResumption:
         _feed(obs, "1234 connect(4, <unfinished ...>")
         ev = _feed(
             obs,
-            '1234 <... connect resumed> {sa_family=AF_INET,'
+            "1234 <... connect resumed> {sa_family=AF_INET,"
             ' sin_port=htons(80), sin_addr=inet_addr("192.0.2.1")}, 16) = 0',
         )
         assert ev is not None
@@ -77,7 +77,7 @@ class TestConnectResumption:
         _feed(obs, "1234 connect(5, <unfinished ...>")
         ev = _feed(
             obs,
-            '1234 <... connect resumed> {sa_family=AF_INET,'
+            "1234 <... connect resumed> {sa_family=AF_INET,"
             ' sin_port=htons(53), sin_addr=inet_addr("8.8.8.8")}, 16) = 0',
         )
         assert ev is not None
@@ -89,9 +89,9 @@ class TestConnectResumption:
         _feed(obs, "1234 connect(4, <unfinished ...>")
         ev = _feed(
             obs,
-            '1234 <... connect resumed> {sa_family=AF_INET,'
+            "1234 <... connect resumed> {sa_family=AF_INET,"
             ' sin_port=htons(443), sin_addr=inet_addr("1.2.3.4")}, 16)'
-            ' = -1 EINPROGRESS (Operation now in progress)',
+            " = -1 EINPROGRESS (Operation now in progress)",
         )
         assert ev is not None
         assert ev.kind == "connect"
@@ -100,7 +100,7 @@ class TestConnectResumption:
 class TestOpenatResumption:
     def test_openat_unfinished_resumed(self):
         obs = StraceObserver()
-        _feed(obs, '1234 openat(AT_FDCWD, <unfinished ...>')
+        _feed(obs, "1234 openat(AT_FDCWD, <unfinished ...>")
         ev = _feed(obs, '1234 <... openat resumed> "/etc/shadow", O_RDONLY) = 3')
         assert ev is not None
         assert ev.kind == "open"
@@ -108,7 +108,7 @@ class TestOpenatResumption:
 
     def test_openat_write_flags_after_resume(self):
         obs = StraceObserver()
-        _feed(obs, '1234 openat(AT_FDCWD, <unfinished ...>')
+        _feed(obs, "1234 openat(AT_FDCWD, <unfinished ...>")
         ev = _feed(
             obs,
             '1234 <... openat resumed> "/tmp/evil.sh", O_WRONLY|O_CREAT, 0777) = 5',
@@ -147,7 +147,7 @@ class TestInterleavedPids:
         # Now resume PID 1234
         ev2 = _feed(
             obs,
-            '1234 <... connect resumed> {sa_family=AF_INET,'
+            "1234 <... connect resumed> {sa_family=AF_INET,"
             ' sin_port=htons(80), sin_addr=inet_addr("192.0.2.1")}, 16) = 0',
         )
         assert ev2 is not None
@@ -163,7 +163,7 @@ class TestInterleavedPids:
         # Resume PID 5678 first
         ev_5678 = _feed(
             obs,
-            '5678 <... connect resumed> {sa_family=AF_INET,'
+            "5678 <... connect resumed> {sa_family=AF_INET,"
             ' sin_port=htons(443), sin_addr=inet_addr("10.0.0.2")}, 16) = 0',
         )
         assert ev_5678 is not None
@@ -173,7 +173,7 @@ class TestInterleavedPids:
         # Resume PID 1234 second
         ev_1234 = _feed(
             obs,
-            '1234 <... connect resumed> {sa_family=AF_INET,'
+            "1234 <... connect resumed> {sa_family=AF_INET,"
             ' sin_port=htons(80), sin_addr=inet_addr("10.0.0.1")}, 16) = 0',
         )
         assert ev_1234 is not None
@@ -188,7 +188,7 @@ class TestInterleavedPids:
         # Feed a resumed line for a third PID (no matching pending) → None
         ev = _feed(
             obs,
-            '9999 <... connect resumed> {sa_family=AF_INET,'
+            "9999 <... connect resumed> {sa_family=AF_INET,"
             ' sin_port=htons(80), sin_addr=inet_addr("1.2.3.4")}, 16) = 0',
         )
         assert ev is None
@@ -205,7 +205,7 @@ class TestOrphanCases:
         obs = StraceObserver()
         ev = _feed(
             obs,
-            '1234 <... connect resumed> {sa_family=AF_INET,'
+            "1234 <... connect resumed> {sa_family=AF_INET,"
             ' sin_port=htons(80), sin_addr=inet_addr("1.2.3.4")}, 16) = 0',
         )
         assert ev is None
@@ -252,7 +252,7 @@ class TestInstanceIsolation:
         # obs2 receives resumed — should NOT match obs1's pending
         ev = _feed(
             obs2,
-            '1234 <... connect resumed> {sa_family=AF_INET,'
+            "1234 <... connect resumed> {sa_family=AF_INET,"
             ' sin_port=htons(80), sin_addr=inet_addr("1.2.3.4")}, 16) = 0',
         )
         assert ev is None  # orphaned in obs2
@@ -260,13 +260,14 @@ class TestInstanceIsolation:
     def test_cleanup_clears_state(self):
         """After cleanup(), pending state is reset."""
         import asyncio
+
         obs = StraceObserver()
         _feed(obs, "1234 connect(4, <unfinished ...>")
         asyncio.run(obs.cleanup())
         # Now resumed should be orphaned
         ev = _feed(
             obs,
-            '1234 <... connect resumed> {sa_family=AF_INET,'
+            "1234 <... connect resumed> {sa_family=AF_INET,"
             ' sin_port=htons(80), sin_addr=inet_addr("1.2.3.4")}, 16) = 0',
         )
         assert ev is None
@@ -286,7 +287,7 @@ class TestLogicalEventDenominator:
 
         for line in [
             "1234 connect(4, <unfinished ...>",
-            '1234 <... connect resumed> {sa_family=AF_INET,'
+            "1234 <... connect resumed> {sa_family=AF_INET,"
             ' sin_port=htons(80), sin_addr=inet_addr("192.0.2.1")}, 16) = 0',
         ]:
             raw_calls += 1
@@ -332,6 +333,7 @@ class TestFixtureResumption:
     def test_strace_5_10_resumed_connect_parsed(self):
         """strace_5_10.txt has an interleaved unfinished+resumed connect pair."""
         from pathlib import Path
+
         fixture = Path(__file__).parent / "fixtures" / "strace_5_10.txt"
         obs = StraceObserver()
         events = []
@@ -347,6 +349,7 @@ class TestFixtureResumption:
     def test_strace_6_1_resumed_connect_parsed(self):
         """strace_6_1.txt (bare PID) has the same resumed connect pair."""
         from pathlib import Path
+
         fixture = Path(__file__).parent / "fixtures" / "strace_6_1.txt"
         obs = StraceObserver()
         events = []

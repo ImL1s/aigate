@@ -61,9 +61,7 @@ def test_zero_real_plus_canary_gives_skipped_unexpected() -> None:
 
 def test_one_real_plus_canary_gives_observed() -> None:
     """≥1 real event + canary → observer confirmed live and capturing."""
-    observed, skipped = classify_network_capture_coverage(
-        [_canary_event(), _real_event()]
-    )
+    observed, skipped = classify_network_capture_coverage([_canary_event(), _real_event()])
     assert SandboxCoverage.NETWORK_CAPTURE in observed
     assert SandboxCoverage.NETWORK_CAPTURE not in skipped
 
@@ -115,8 +113,7 @@ def test_coverage_sets_are_disjoint() -> None:
     ]:
         obs, skip = classify_network_capture_coverage(events)
         assert not (
-            SandboxCoverage.NETWORK_CAPTURE in obs
-            and SandboxCoverage.NETWORK_CAPTURE in skip
+            SandboxCoverage.NETWORK_CAPTURE in obs and SandboxCoverage.NETWORK_CAPTURE in skip
         ), f"Both sets contain NETWORK_CAPTURE for events={events}"
 
 
