@@ -122,6 +122,24 @@ def test_coverage_sets_are_disjoint() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _read_birdcage_backend_source() -> str:
+    """Return BirdcageBackend source text, CWD-independent.
+
+    Uses importlib.util.find_spec to locate the module file regardless of
+    where pytest is invoked from (closes PR #6 P2 comments 3117437892 +
+    3117438374). Falls back to `__file__`-relative resolution if find_spec
+    returns no origin.
+    """
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.find_spec("aigate.sandbox.birdcage_backend")
+    if spec is not None and spec.origin:
+        return Path(spec.origin).read_text()
+    # Fallback: walk up from this test file to the repo root.
+    return (Path(__file__).parents[5] / "src/aigate/sandbox/birdcage_backend.py").read_text()
+
+
 def test_canary_wrap_contains_canary_path() -> None:
     """The sh wrapper BirdcageBackend builds MUST reference CANARY_PATH.
 
@@ -130,10 +148,7 @@ def test_canary_wrap_contains_canary_path() -> None:
     would require spinning up an asyncio subprocess; this test pins the
     constant invariant instead.
     """
-    from pathlib import Path
-
-    src = Path("src/aigate/sandbox/birdcage_backend.py").read_text()
-    # Wrapper literal must reference CANARY_PATH via f-string interpolation.
+    src = _read_birdcage_backend_source()
     assert "cat {CANARY_PATH}" in src or f"cat {CANARY_PATH}" in src, (
         "canary_wrap in birdcage_backend.py must open CANARY_PATH via `cat`"
     )
@@ -146,11 +161,7 @@ def test_canary_wrap_precedes_birdcage_argv() -> None:
     of strace so the parser sees it before any package syscalls (PR #6 P1
     comment 3117029517).
     """
-    from pathlib import Path
-
-    src = Path("src/aigate/sandbox/birdcage_backend.py").read_text()
-    # Sloppy but robust: find the assignment and assert canary_wrap is to
-    # the left of birdcage_argv in the slice.
+    src = _read_birdcage_backend_source()
     idx = src.find("argv = observer.argv_prefix(sink) + canary_wrap + birdcage_argv")
     assert idx >= 0, (
         "BirdcageBackend argv composition must be "
