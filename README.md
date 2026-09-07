@@ -349,6 +349,12 @@ uv venv && uv pip install -e ".[dev]"
 ./scripts/run-e2e.sh                      # full E2E in Docker sandbox
 ```
 
+---
+
+## Support
+
+If this project saved you some time, you can [buy me a coffee](https://buymeacoffee.com/iml1s).
+
 ## License
 
 [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0)
